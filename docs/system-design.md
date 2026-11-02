@@ -41,7 +41,7 @@
 ### 2.1 Component diagram
 
 ```
-                         ┌──────────────────────── Neutral org ─────────────────────────┐
+                         ┌──── Gateway: neutral org · Rule Engine, AI: observer ────────┐
  Voter web ─┐            │                                                              │
             ├─ REST ─> Core API ── outbox (FIFO) ──> Ledger Gateway ──> validator nodes (smart contract)
  Admin web ─┘ (commission) │  ▲                       ▲ query API           ▲ direct reads (observer's pinned node)
@@ -58,9 +58,9 @@
 | Admin web | Seungmin | Create elections, roster, issue links, request and sign approvals, review findings, tally, finalize | Commission (approvers belong to each org) |
 | Core API | Seungmin | Election state machine, DB, outbox, checkpoints, views, tally | Commission |
 | Ledger Gateway | Harits | Validate and record ledger events, batch-anchor voter events, relay proposals and approvals, query API | Neutral org |
-| Smart contract | Harits | Organization registry, election state, approval quorum, finding records and reviews, finalization conditions | Validator nodes (4 for BFT, D-03) |
-| Rule Engine | Anik | Evaluate R1–R5 at every checkpoint, sign and register findings | Neutral org |
-| AI Audit Agent | Anik | Collect evidence with read-only tools and write reports (optional feature) | Neutral org |
+| Smart contract | Harits | Organization registry, election state, approval quorum, finding records and reviews, finalization conditions | Validator nodes (3, one per organization, D-03) |
+| Rule Engine | Anik | Evaluate R1–R5 at every checkpoint, sign and register findings | Observer (D-25, v1.1) |
+| AI Audit Agent | Anik | Collect evidence with read-only tools and write reports (optional feature) | Observer (D-25, v1.1) |
 
 ### Technology stack
 
@@ -70,7 +70,7 @@
 | Web | TypeScript + React | D-05 | free |
 | Database | PostgreSQL (one database, two schemas) | D-06 | free |
 | Where it runs | Each developer's PC with `docker compose up`; the demo runs on one PC (no cloud) | section 7 #6, section 10 | free |
-| Blockchain | Chosen by Harits (recommended: Besu; a local chain such as Hardhat during development) | D-02 | free |
+| Blockchain | Private PureChain network (go-ethereum fork, EVM; chosen by Harits, v1.1) | D-02 | free |
 | Mail | MailHog (fake mailbox) in development, CSV export in the demo | D-16 | free |
 | Repository / CI | GitHub monorepo + GitHub Actions | D-18 | free |
 | Mock servers | prism (from the OpenAPI files) | section 7 #4 | free |
@@ -84,14 +84,14 @@ model are theirs to choose.
 | Organization | Role |
 |---|---|
 | Commission (`org_commission`) | Operator org. Runs Core and the web, creates elections, tallies. Excluded from the finding-review quorum |
-| Observer (`org_observer`) | Approves admin actions, reviews findings, runs the **pinned node** (the node Core and the Rule Engine read directly) |
-| Neutral org (`org_neutral`) | Runs the Gateway, Rule Engine and AI; approves admin actions, reviews findings |
+| Observer (`org_observer`) | Runs the Rule Engine and AI (D-25, v1.1); approves admin actions, reviews findings, runs the **pinned node** (the node Core and the Rule Engine read directly) |
+| Neutral org (`org_neutral`) | Runs the Gateway; approves admin actions, reviews findings |
 
 - 3 organizations, approval threshold 2: an admin action needs signatures from 2 organizations **other than the requester**;
   a finding review needs signatures from 2 organizations other than the commission (observer and neutral org). Same as the
   common setup in `docs/test-plan.md`.
-- Validator nodes are assumed to be split among these organizations. The pinned node must belong to an organization
-  other than the Gateway operator (the neutral org) — `chain-interface.md`, D-26.
+- Validators: 3, one per organization (D-03). Pinned nodes: the observer's first, the commission's second — never the
+  Gateway operator's (neutral org) — `chain-interface.md`, D-26.
 - All organizations run in docker on one PC. That they are not really independent is disclosed in the threat model.
 
 ---
@@ -208,7 +208,7 @@ Always read with `?checkpoint=k`. No names or personal data.
 - **IDs:** prefix + 26 characters. System objects use ULIDs; voter-side IDs (`evr_`, `vtr_`, …) are random, with no timestamp.
 - **Time:** UTC, whole seconds. Voter-side times are rounded down to the time bucket.
 - **Hashes / signatures:** SHA-256 over RFC 8785 (JCS) canonical JSON. Signature digests use a fixed 32-byte layout and are
-  signed with EIP-191 secp256k1 (Besu; ed25519 if Fabric, D-02). Details in `hashing.md`.
+  signed with EIP-191 secp256k1 (EVM: PureChain, D-02). Details in `hashing.md`.
 - **Errors:** `application/problem+json`, with codes from `ProblemCode` in `common.schema.json`.
 
 ---

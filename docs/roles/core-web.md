@@ -53,7 +53,8 @@ organization and never creates findings; it only relays signatures made in the s
    - `redeem` locks the token, marks it USED and inserts `nullifier_hash` into the `ballot` schema, all in **one transaction**. No column links the two.
    - `ballots`: idempotent retry (same ballot → 200 with the original receipt); window check after the idempotency check; `rejected_attempts` for refusals.
 4. **Outbox:**
-   - Write the change and its event in one transaction. Retry with the same `event_id` (backoff 1 s → 60 s).
+   - Creation check (v1.1): wait until the pinned node's latest block ≥ `block_number` + `CONFIRMATION_DEPTH`; `PINNED_NODE_URL` is a comma-separated list, try the URLs in order.
+   - Write the change and its event in one transaction. Retry with the same `event_id` (RETRY_LATER: every 1 s for the first 30 s, then exponential backoff up to 60 s; contracts v1.1).
    - Give system events a gap-free `seq` per election. Voter events get random `evr_` IDs and bucketed times, and no seq.
    - **Release unit = time bucket.** At the end of a bucket, send its voter events (shuffled) first, then its system events in seq order. Send the next request only after the previous one has final outcomes.
    - Handle each outcome:

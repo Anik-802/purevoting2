@@ -92,11 +92,12 @@ Tell the team which one you chose in week 1 (one line in `docs/decisions.md` D-0
 
 ### 4.2 Gateway
 1. **Event intake** (`POST /v1/events`). Outcomes:
-   - **ACCEPTED** — for system events this means the transaction is included in a block. Return `tx_hash` and `block_number` for ACCEPTED and DUPLICATE **system events** (voter events have no transaction yet).
+   - **ACCEPTED** — for system events this means the transaction is included in a **confirmed** block (latest block ≥ its block + `confirmation_depth` D, D-27, contracts v1.1). Return `tx_hash` and `block_number` for ACCEPTED and DUPLICATE **system events** (voter events have no transaction yet).
    - **DUPLICATE** — same `event_id`, same `payload_hash`.
    - **CONFLICT** — same `event_id`, different `payload_hash`.
    - **REJECTED** — see the reject codes in the OpenAPI description.
-   - **RETRY_LATER** — a seq gap, ELECTION_OPENED not applied yet, a pending transaction, or `TIME_NOT_REACHED`.
+   - **RETRY_LATER** — a seq gap, ELECTION_OPENED not applied yet, a pending or not yet confirmed transaction, or `TIME_NOT_REACHED`.
+   - **Confirmations (v1.1, chain-interface.md "Confirmations"):** expose chain-derived data (outcomes incl. REJECTED, finding records, anchors and proofs, indexed chain events, proposal status, registry) only from confirmed blocks; while a transaction is unconfirmed re-broadcast only the same signed transaction; "already applied" reverts → ACCEPTED / DUPLICATE only on an exact match; follow the revert → outcome table there.
 2. **Ordering:**
    - Apply core system events strictly by `seq` per election. A rejected event still consumes its seq.
    - Voter events have no seq.
@@ -157,7 +158,7 @@ Seungmin writes the setup scripts; Anik never writes labels.
 | Week 2 | Gateway accepts `POST /v1/events` for the T01 path and anchors them; **`POST /v1/finding-records` + contract finding records (no reviews yet); registry setup script (all three org signers, operatorOrg, ruleEngineSigner, gatewayAccount confirmed by all); pinned observer node RPC reachable**; Dockerfile + compose block + `.env` keys handed to Seungmin; queries work against the examples |
 | **Week 3** | **T01 with real Core** |
 | **Week 5** | T04, T05 and T15(d) pass; reviews, finalize quorum and proposals work end to end |
-| **Week 7** | Demo rehearsal: 4 nodes from `docker compose up` on a fresh PC |
+| **Week 7** | Demo rehearsal: 3 validators (+ optional standby node) from `docker compose up` on a fresh PC |
 
 ## 9. First issues to open
 1. D-02 decision + PR to `docs/decisions.md`.
@@ -168,6 +169,17 @@ Seungmin writes the setup scripts; Anik never writes labels.
 6. Contract + Gateway: finding records (`relayFindingRecord`, `POST /v1/finding-records`) — week 2 (needed for T01).
 7. Gateway: query endpoints + indexing of relayed chain events — week 2–3.
 8. Contract: anchors refusal rule, proposals + execution order — week 4.
+
+### v1.1 additions (2026-11-02, decisions D-02 / D-03 / D-27)
+- Gateway: confirmed-blocks rule, same-signed-transaction re-broadcast, exact-match handling of "already applied"
+  reverts, revert → outcome table (NotGateway = RETRY_LATER + LEDGER_UNAVAILABLE alert), `eth_call` pre-check of time
+  preconditions, `GET /v1/chain.confirmation_depth`.
+- Contract: commitCheckpoint with reason CLOSE_FINAL only while status == CLOSED; `submitFindingRecord` /
+  `relayFindingRecord` use `hasCheckpoint` for "≤ last committed checkpoint"; optional bucket-alignment checks in
+  createElection; optional `CheckpointCommitted` event.
+- Network: a mode that seals blocks continuously (empty blocks) with period P ≤ 5 s (provisional).
+- **Measurements due 2026-11-09:** mode name and P; one- and two-validator stop tests; deepest reorg observed in
+  stop/restart tests (final D = max(2, that + 1)). Record them in D-02 / D-03 / D-27.
 9. Contract: reviews, finalize quorum — week 4–5.
 10. (Optional) indexing of direct submissions.
 

@@ -1,18 +1,19 @@
-# On-chain interface (normative, v1.0)
+# On-chain interface (normative, v1.1)
 
 Purpose: let the Rule Engine (R4, R5), organizations and any auditor read anchors, election state and the registry
 **directly from a validator node**, and let organizations and the Rule Engine **submit signed decisions, reviews and
 finding records directly**, so that neither detection nor participation depends on the Gateway or Core.
 **Pinned chain configuration.** chain_id and contract_address are fixed when the network is set up, confirmed by every
 registered organization, and written into the deployment configuration of Core, the Rule Engine and each organization's
-client, together with the RPC URL of at least one node run by an organization other than the Gateway operator (D-26).
-Readers use only these pinned values. Gateway `GET /v1/chain` (platform, chain_id, contract_address, rpc_urls — one URL
-per node) is a convenience: readers compare it with the pinned values and raise a CHAIN_CONFIG_MISMATCH alert (Core
-itself, the Rule Engine via POST /internal/v1/audit-alerts) if they differ.
+client, together with the RPC URL of at least one node run by an organization other than the Gateway operator (D-26)
+(demo: the observer's node first, the commission's second, D-03) and the **confirmation depth D** (D-27, see
+"Confirmations"). Readers use only these pinned values. Gateway `GET /v1/chain` (platform, chain_id, contract_address,
+rpc_urls — one URL per node, confirmation_depth) is a convenience: readers compare it with the pinned values and raise a
+CHAIN_CONFIG_MISMATCH alert (Core itself, the Rule Engine via POST /internal/v1/audit-alerts) if they differ.
 
-The Solidity interface is normative for the Besu option (D-02 A). For Fabric (D-02 B) the chaincode exposes functions
-with the same names, arguments and return fields (JSON). The implementation (Harits) may add functions but must not
-change these. `tools/validate_contracts.py` checks that the interface below has no duplicate function names.
+The Solidity interface is normative for EVM platforms: D-02 A (Besu) and D-02 C (PureChain, the platform chosen in
+v1.1). For Fabric (D-02 B) the chaincode would expose functions with the same names, arguments and return fields
+(JSON). The implementation (Harits) may add functions but must not change these. `tools/validate_contracts.py` checks that the interface below has no duplicate function names.
 
 ```solidity
 // SPDX-License-Identifier: MIT
@@ -74,7 +75,8 @@ interface IPureVotingLedger {
         bytes32 findingId, bytes32 electionId, uint8 ruleId, uint8 result, uint64 findingCheckpoint,
         bytes32 findingHash, bytes calldata signature, string calldata findingIdText, string calldata electionIdText
     ) external;   // contract checks sha256(findingIdText) == findingId, sha256(electionIdText) == electionId and
-                  // findingCheckpoint <= the election's last committed checkpoint (same rule as the Gateway path),
+                  // findingCheckpoint <= the election's last committed checkpoint (same rule as the Gateway path;
+                  // refused while no checkpoint is committed yet, see "Checkpoint 0"),
                   // so the Gateway can index the real ID strings; a second record for the same findingId is a no-op if
                   // findingHash is identical and reverts otherwise
     function submitFindingReview(
@@ -110,6 +112,9 @@ interface IPureVotingLedger {
         // commit was rejected is skipped, so gaps only occur after rejections)
         // reason 0 PERIODIC, 1 STATE_CHANGE, 2 CLOSE_FINAL, 3 TALLY (lets the contract identify the TALLY checkpoint); tablesHash = Hc(payload.tables)
         // CLOSED→TALLIED commits one checkpoint with reason TALLY (not an extra STATE_CHANGE)
+        // reason CLOSE_FINAL: at most once per election and only while status == CLOSED (v1.1). Consequence: if
+        // ELECTION_CLOSED was rejected, Core stays CLOSED (strict) but its CLOSE_FINAL is rejected too, so no tally is
+        // possible and ELECTION_VOID is the only exit (README state machine) — intended
     function commitAnchor(bytes32 electionId, bytes32 anchorId, bytes32 merkleRoot, bytes32 rejectionsRoot, uint8 mode,
         uint32 eventCount, uint64 bucketMin, uint64 bucketMax) external; // batched: bucketMax + bucket <= effective end
     function publishTally(bytes32 electionId, bytes32 resultHash, uint64 finalCheckpoint, uint64 coreSeq) external; // once only; finalCheckpoint == the CLOSE_FINAL checkpoint
@@ -177,7 +182,16 @@ Unset hash fields are `bytes32(0)` on chain and the 64-character string `000…0
 | rosterHash | 0 | ROSTER_FROZEN.roster_hash, then each ROSTER_AMENDED.roster_hash_after |
 | tokenSetRoot | 0 | each TOKEN_BATCH_ISSUED / TOKEN_REVOKED .token_set_root |
 | resultHash | 0 | TALLY_PUBLISHED.result_hash |
-| lastCheckpoint | none | each accepted CHECKPOINT_COMMITTED |
+| lastCheckpoint | none (reads as 0, see "Checkpoint 0") | each accepted CHECKPOINT_COMMITTED |
+
+## Checkpoint 0
+
+Checkpoint numbers start at 0. Core's open checkpoint is 0 from creation (ELECTION_CREATED and ROSTER_FROZEN carry
+checkpoint 0), and the first commit is checkpoint 0 with reason STATE_CHANGE, right after ROSTER_FROZEN; then checkpoint 1
+is open. The contract accepts 0 as the first commit; if that commit is rejected, the next committed number is the first
+one (gaps only after rejections). Before any commit, `electionState.lastCheckpoint` reads 0 and means "none"; readers
+tell the cases apart with `electionStateAtCheckpoint(e, 0).windowEnd != 0` (a commit always stores windowEnd). Checks of
+the form "≤ last committed checkpoint" refuse every value while no checkpoint is committed.
 
 **Creation check.** Right after ELECTION_CREATED is ACCEPTED, Core reads `electionState` and `electionGovernance`
 **directly from a validator node** (not through the Gateway), using the pinned chain configuration above (contract
@@ -188,11 +202,12 @@ operatorOrgId and proposalTtlHours — with the ELECTION_CREATED payload. Until 
 outbox event of the election, and refuses `roster:freeze`, `tokens:issue` and admin-action create/submit with 409
 INVALID_STATE_TRANSITION; `Election.creation_check` shows PENDING / PASSED / MISMATCH.
 - **Not yet visible ≠ mismatch.** The check starts when ELECTION_CREATED is ACCEPTED or DUPLICATE; both SubmitResults carry
-  `tx_hash` and `block_number`. If the pinned node's latest block is lower than `block_number`, Core retries
-  (creation_check stays PENDING); if the node is unreachable, Core retries and raises LEDGER_UNAVAILABLE after 60 s.
-- **Not found.** If the node has reached `block_number` and `configHash` still reads as 0 (the contract's marker for "no
-  such election"; QBFT blocks are final, so this is not a delay) for 60 s, the Gateway's report was wrong: this is
-  treated as a mismatch (GOVERNANCE_MISMATCH, detail "not found").
+  `tx_hash` and `block_number`. If the pinned node's latest block is lower than `block_number + D` (the block is not
+  confirmed on that node yet, see "Confirmations"), Core retries (creation_check stays PENDING); if the node is
+  unreachable, Core retries and raises LEDGER_UNAVAILABLE after 60 s.
+- **Not found.** If the node's latest block has reached `block_number + D` and `configHash` still reads as 0 (the
+  contract's marker for "no such election"; the block is confirmed, so this is not a delay) for 60 s, the Gateway's
+  report was wrong: this is treated as a mismatch (GOVERNANCE_MISMATCH, detail "not found").
 - Only these two cases are a mismatch: values that exist and differ, or not found after the block was reached.
 - **Mismatch** → alert (GOVERNANCE_MISMATCH), creation_check = MISMATCH (final): the FIFO cannot be resumed (resumeOutbox
   → 409) and the only exit is to delete the election at Core (`POST /v1/elections/{id}:delete`). The DRAFT record left on
@@ -204,6 +219,46 @@ R5 repeats the comparison of the immutable fields at every checkpoint (`governan
 covered by `electionStateAtCheckpoint`). So a Gateway that passes other organizations or another threshold to
 `createElection` is detected by Core before the roster is frozen and before any approval or review exists, even if the
 Gateway's own API reports the expected values.
+
+## Confirmations (v1.1, D-27)
+
+A block can be replaced by a fork on the chosen platform, so being included in a block is not enough.
+
+- **Confirmed.** A block b is confirmed on a node when that node's latest block ≥ b + D (D = pinned `confirmation_depth`,
+  provisional 2). With D = 0 this is exactly the v1.0 behaviour. The platform must seal blocks continuously (also empty
+  blocks) with period P, and (1 + D) · P ≤ time_bucket_seconds / 4 (D-02).
+- **Gateway output.** The Gateway indexes and exposes chain-derived data **only from confirmed blocks** (on the node it
+  writes through): `POST /v1/events` outcomes ACCEPTED, DUPLICATE and REJECTED (a revert counts only when its receipt is in
+  a confirmed block), finding-record results, anchor status ANCHORED, `/v1/anchors` and proofs, ledger events indexed from
+  ProposalDecided / FindingRecorded / FindingReviewed and the proposal status derived from them, and the organization
+  registry. Until then a submission gets RETRY_LATER and a read shows the item as not yet recorded.
+- **Resubmission.** The Gateway keeps the signed transaction of each submission. While it is not in a confirmed block, the
+  Gateway only re-broadcasts **that same signed transaction** (same nonce and hash), never a new one, so an effect is
+  applied at most once. A retry after a confirmed revert (e.g. TimeNotReached) is a new transaction; the Gateway should
+  check time preconditions with `eth_call` first and answer RETRY_LATER without mining a revert.
+- **"Already applied" reverts.** If a call reverts because its effect may already be on chain (ElectionExists,
+  SeqNotIncreasing, CloseFinalAlreadyCommitted), the Gateway answers ACCEPTED / DUPLICATE only on an **exact match** in
+  confirmed state, otherwise REJECTED: state events — a confirmed StateChanged with coreSeq equal to the event's seq;
+  ELECTION_CREATED — the election exists with the same configHash and creation fields; checkpoints —
+  `electionStateAtCheckpoint(k).lastCoreSeq` equals the event's seq. (A repeated commitAnchor with identical fields does
+  not revert: it is a no-op without an event; AnchorConflict always means different fields.)
+- **Revert → outcome mapping** (Gateway writes):
+
+  | Contract revert | Gateway outcome |
+  |---|---|
+  | TimeNotReached | RETRY_LATER (TIME_NOT_REACHED) |
+  | NotGateway | RETRY_LATER and a LEDGER_UNAVAILABLE alert (the Gateway account is not configured or not confirmed: a setup error, not a rule violation) |
+  | OrgNotRegistered, OperatorOrgMismatch | REJECTED ORG_NOT_REGISTERED |
+  | "already applied" reverts above | ACCEPTED / DUPLICATE on an exact match, otherwise REJECTED INVALID_STATE_TRANSITION |
+  | any other revert | REJECTED INVALID_STATE_TRANSITION (the revert name goes into the rejection record's detail) |
+
+- **Readers.** Core's creation check, the Rule Engine (R4, R5) and organizations' clients count a chain item only when
+  their pinned node's latest block ≥ the item's block + D; otherwise they retry, and after their normal timeout report
+  the item as not available (R5: BATCH_NOT_ANCHORED for an anchor; NODE_UNAVAILABLE for any other chain item — registry,
+  state, snapshot — or when no node answers) — never as a mismatch. The pinned node URLs are tried in order. A direct submission (submitDecision, submitFindingRecord, submitFindingReview) counts as recorded only when
+  confirmed.
+- **Limit.** D protects against accidental forks only. Validators controlling a majority (in the demo, one person) can
+  rewrite the chain to any depth; this is detected afterwards by R5 and Core comparisons, not prevented (threat model I15).
 
 ## Boundary timestamps
 
@@ -239,6 +294,9 @@ when CHECKPOINT_COMMITTED k was applied — and compares it with the state impli
 seq ≤ that snapshot's `lastCoreSeq` (status, windowEnd, rosterHash, tokenSetRoot, resultHash). Later chain progress
 therefore never causes a mismatch, and re-running an old checkpoint gives the same answer.
 
+Only confirmed chain data counts ("Confirmations"). Anchors are enumerated from the Gateway list (`/v1/anchors`, each with
+its block_number), not by index: `anchorAt` has no block number and `anchorCount` may include unconfirmed anchors. An
+on-chain anchor missing from the Gateway list is a mismatch only when its AnchorCommitted log is in a confirmed block.
 For every anchor of the election: read `anchorAt` from the pinned node ("Pinned chain configuration"; `rpc_urls` from the
 Gateway only for comparison), recompute `merkle_root` from `GET /v1/anchors/{id}/leaves` + the events and `rejections_root` from
 `GET /v1/rejections`, and compare with the on-chain values. Any difference → R5 FAIL. No node reachable → INCONCLUSIVE

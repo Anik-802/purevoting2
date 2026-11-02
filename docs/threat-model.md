@@ -1,6 +1,6 @@
-# Threat model (v1.0, with contracts v1.0)
+# Threat model (v1.1, with contracts v1.1)
 
-Scope: the MVP described in `decisions.md` (confirmed v1.0) and `contracts/` v1.0.
+Scope: the MVP described in `decisions.md` (confirmed v1.1) and `contracts/` v1.1.
 Status: **design only — nothing below is implemented or tested yet.** Each mitigation names the contract element
 that makes it possible; whether the implementation actually does it must be proven by the tests in `test-plan.md`.
 
@@ -54,6 +54,7 @@ Voter · Election commission admin (Core operator) · Approver of each organizat
 | L1 | Gateway operator watches live traffic | voter events released per bucket and shuffled; Gateway must not record arrival time/order | A Gateway operator capturing traffic sees bucket-level batches only; anything finer depends on the Core release behaviour being implemented as specified |
 | E4 | Core operator stuffs ballots for abstainers (marks unused tokens USED, registers nullifiers, casts ballots) | counts stay consistent, so R1–R5 cannot detect it; only voters checking that they did not vote, or turnout comparisons, would | **Not detectable in the MVP** — must not claim protection against an insider with Core write access |
 | A4 | Core alters AI reports or their human_review afterwards | reports and human_review are stored only at Core (finding reviews, by contrast, are on chain) | AI reports are not tamper-evident; experiment results based on them must be exported and hashed at the end of each run |
+| I15 | A fork replaces recent blocks (accidental), or validators controlling a majority rewrite the chain (deliberate) | everything counts only from confirmed blocks (confirmation_depth D, D-27); the Gateway re-broadcasts only the same signed transaction; Core and R5 compare chain state and anchors with the ledger events and with values recorded earlier | D covers accidental forks only. With 3 validators, two (in the demo, one person running all nodes) can rewrite the chain to any depth; this is **detected afterwards, not prevented** |
 | I14 | Operator admin resumes a stopped outbox alone (e.g. after an injected-event alert) | resume is logged as a core-api alert visible to all organizations | One operator admin can resume without other organizations' consent |
 | O1 | Operator controls staff accounts and execution | staff and auditor accounts are created by the deployment's setup script and stored in Core (operator org); no account API in the MVP; an approved action is executed by Core | The operator can create or block staff accounts of other organizations in Core (their chain keys and direct submissions are unaffected) and can refuse to execute an approved action (e.g. a VOID); detected as `missing_effects` only after execution, not if it never executes |
 | L3 | Rule Engine operator stops | none | Without new finding records for the TALLY checkpoint the election cannot be finalized; the only exit is ELECTION_VOID. A lost finding body (Rule Engine failed to keep it) likewise blocks finalization. A finding body whose hash does not match its record (Rule Engine bug) can never be stored, with the same consequence |

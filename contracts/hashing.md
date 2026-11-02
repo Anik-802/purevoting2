@@ -79,7 +79,7 @@ without `review`, `recorded_event_id` and `evidence_check`, i.e. the FindingSubm
 organization's auditorKey, or a node). On mismatch it refuses to sign — so Core cannot show reviewers an altered finding.
 
 **Message encoding.** The digest's 32 raw bytes are the signed message.
-- `eip191-secp256k1` (required for Besu, D-02 A): Ethereum `personal_sign` of the 32 bytes, i.e. secp256k1 over
+- `eip191-secp256k1` (required on EVM platforms: Besu D-02 A, PureChain D-02 C): Ethereum `personal_sign` of the 32 bytes, i.e. secp256k1 over
   `keccak256(0x19 || "Ethereum Signed Message:\n32" || digest)`. `value` = `0x` + r (32 B) + s (32 B) + v (1 B, 27 or 28)
   as 130 lowercase hex chars; `signer` = 0x-prefixed lowercase address. The contract verifies with `ecrecover`.
 - `ed25519` (Fabric only, D-02 B — EVM has no Ed25519 verification): RFC 8032 over the 32 bytes; `value` = base64url

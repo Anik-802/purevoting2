@@ -37,6 +37,7 @@ services:
       CHAIN_ID: ${CHAIN_ID:-}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
       PINNED_NODE_URL: ${PINNED_NODE_URL:-}
+      CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}   # D-27; Gateway and Rule Engine blocks pass it too
       CREATION_CHECK_MODE: ${CREATION_CHECK_MODE:-stub}   # dev stub until week 3 (role design); "node" for T01
       VOTER_WEB_URL: ${VOTER_WEB_URL:-http://127.0.0.1:5173}
     depends_on:

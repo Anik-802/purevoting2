@@ -1,4 +1,4 @@
-# Design decisions (v1.0)
+# Design decisions (v1.1)
 
 > 2026-10-18 v1.0: after a supervisor review (DECISIONS VERDICT: READY TO CONFIRM) every item except D-02 and D-15 is
 > **confirmed as recommended**. Wording added at confirmation is marked **Confirmed note (v1.0)**. D-02 is delegated to
@@ -7,6 +7,9 @@
 > under **Affects** as well (PR, D-20).
 > Owners: Seungmin (Core API, web, contracts, integration), Harits (ledger, smart contract, Gateway), Anik (Rule Engine,
 > AI Audit Agent). Team rules (repository, freeze, mocks, integration points, scope): `docs/system-design.md` section 7.
+> 2026-11-02 v1.1: D-02 confirmed (PureChain, on Harits's delegation), D-03 node count set, new D-27 (confirmation depth),
+> after two supervisor reviews of the answers to Harits's open questions. Values marked *provisional* wait for Harits's
+> measurement (due 2026-11-09). Contracts changed accordingly (v1.1, `contracts/CHANGELOG.md`).
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -15,10 +18,10 @@
 | ID | Topic | Decision | Owner | Status |
 |---|---|---|---|---|
 | D-01 | 2-month scope | One single-choice voting method (one person, one vote, one candidate): one normal path + fault scenarios; advanced cryptography design-only | All | Confirmed |
-| D-02 | Blockchain platform | Recommended Hyperledger Besu (QBFT) + Solidity; must verify signatures on chain (D-11) | Harits | Delegated (Harits) |
-| D-03 | Nodes and operators | Validator nodes split among the organizations; one pinned node run by an org other than the Gateway operator; node count per D-02 | Harits | Confirmed |
+| D-02 | Blockchain platform | **Private PureChain network** (go-ethereum fork, EVM, Solidity; option C); blocks sealed continuously with period P ≤ 5 s (*provisional*); must verify signatures on chain (D-11) | Harits | Confirmed (v1.1) |
+| D-03 | Nodes and operators | **3 validators, one per organization**; pinned nodes: observer first, commission second (not the Gateway operator); fault tolerance measured | Harits | Confirmed |
 | D-04 | Ledger recording unit | System events anchored individually; voter-side events only as Merkle roots of shuffled batches (60 s / 50 events) | Harits | Confirmed |
-| D-05 | Languages | Python (FastAPI) servers, TypeScript (React) web; contract language per D-02 | All | Confirmed |
+| D-05 | Languages | Python (FastAPI) servers, TypeScript (React) web; Solidity contract (EVM, D-02) | All | Confirmed |
 | D-06 | Database | PostgreSQL, **one database, two schemas** (credential / ballot, different DB roles); Rule Engine and AI have no DB access | Seungmin | Confirmed |
 | D-07 | Anonymous credential | **The browser generates the credential**; the server registers only its hash (in the same transaction as the link use) | Seungmin | Confirmed |
 | D-08 | Ballot encryption | Sealed with the election public key (libsodium sealed box), decrypted after closing | Seungmin | Confirmed |
@@ -38,8 +41,9 @@
 | D-22 | Who judges voter-side violations | Per-event checks (window, duplicates) in Gateway software; the chain checks batch time ranges and system events (state machine, approval signatures) | Harits | Confirmed |
 | D-23 | Election private key | MVP: held by the commission, **revealed after the tally** so auditors can recount (R5); threshold decryption is future work | Seungmin | Confirmed |
 | D-24 | Finalization and review authority | Rule Engine records findings on the ledger; FAIL / INCONCLUSIVE resolved only by signed reviews of ≥ threshold orgs **other than the operator**; the contract checks at finalization; AI reports optional | Seungmin, Anik, Harits | Confirmed |
-| D-25 | Rule Engine operator | ruleKey held and operated by the neutral org, not the commission | All | Confirmed |
+| D-25 | Rule Engine operator | ruleKey held and operated by an org other than the commission and the Gateway operator (demo: observer, v1.1) | All | Confirmed (v1.1) |
 | D-26 | Gateway operator | Neutral org. It can delay relaying but cannot forge signed approvals, reviews or findings; signers can submit directly on chain | Harits | Confirmed |
+| D-27 | Confirmation depth | A chain item counts only in a block with ≥ D blocks on top (D = 2, *provisional*); pinned like the contract address | Harits, Seungmin, Anik | Confirmed (v1.1) |
 
 ---
 
@@ -61,6 +65,16 @@
 - **Recommendation:** (A); (C) if Harits can use the existing chain right away.
 - **Hard requirement:** whatever the platform, the chain verifies the signatures of approvals, reviews and finding records (D-11).
 - **Affects:** `Signature.scheme` (Besu: `eip191-secp256k1`; Fabric: `ed25519`); the Gateway API is platform-independent.
+- **Decision (v1.1, Harits):** (C) — the original PureVoting private chain, **PureChain** (geth 1.13.15-purechain, a
+  go-ethereum fork; EVM, Solidity, `eip191-secp256k1`), run as a private network with one validator per organization
+  (D-03). Harits compared its modes (private always-mining, Smart Auto Mining, PoA2) on a local network.
+  - **Block production:** the chosen mode seals blocks continuously, also without transactions (empty blocks), with a
+    fixed period P. A mode that seals only when transactions arrive (Smart Auto Mining) is not allowed: confirmations
+    (D-27) need blocks to keep coming.
+  - **Timing:** (1 + D) · P ≤ time_bucket_seconds / 4. With the 60 s demo bucket and D = 2: P ≤ 5 s (whole seconds).
+    Recomputed when D is final.
+  - chain-interface.md is normative for EVM platforms (A or C). `GET /v1/chain` reports `platform: other`.
+  - *Pending measurement (Harits, due 2026-11-09):* mode name and measured P.
 
 ### D-03. Nodes and operators
 - **Background:** BFT-type consensus (e.g. QBFT) stalls with 3 nodes if one fails (3f+1).
@@ -70,6 +84,13 @@
   2. At least one node run by an organization other than the Gateway operator (demo: the observer) is the pinned node in
      the deployment configuration (chain-interface.md).
   3. The node count follows D-02 and is set by Harits (4 for BFT-type consensus).
+- **Decision (v1.1):** **3 validators, one per organization** (commission, neutral, observer). PureChain's modes are not
+  BFT-type, so the 3f+1 rule does not apply. A non-validator standby node is optional and not counted.
+  - Pinned RPC URLs for Core and the Rule Engine: the observer's validator first, the commission's second (both are
+    run by orgs other than the Gateway operator; two URLs keep reads working when one node is stopped in a fault test).
+  - Fault tolerance is measured, not assumed: stop one validator (do blocks continue?) and two (do they stop?). If one
+    stopped validator halts the chain, the report states it as a demo limit.
+  - *Pending measurement (Harits, due 2026-11-09):* the two stop tests.
 - **Affects:** `GET /v1/nodes`, demo scenario, `docs/threat-model.md`
 
 ### D-04. Ledger recording unit
@@ -86,6 +107,7 @@
 - Python 3.11 + FastAPI, web TypeScript + React.
 - **Confirmed note (v1.0):** the contract language follows D-02 (Besu: Solidity; Fabric: chaincode with the same function
   names and arguments as chain-interface.md).
+- **v1.1:** D-02 = PureChain (EVM), so the contract is Solidity.
 
 ### D-06. Database
 - **Decision:** one PostgreSQL **database** with schemas `credential` (elections, roster, token hashes, admin work) and
@@ -255,12 +277,18 @@
 
 ### D-25. Rule Engine operator
 - **Background:** whoever holds the Rule Engine key could record selectively (only PASS) or delay audits.
-- **Decision:** the neutral org, not the commission, holds and runs ruleKey. The Rule Engine code is public so each
+- **Decision:** an org other than the commission (v1.1: and other than the Gateway operator) holds and runs ruleKey — demo:
+  the observer (v1.1 below). The Rule Engine code is public so each
   participating org (and invited auditors) can re-run the rules on the same data with staff views and the read-only
   Gateway key (auditorKey) and compare.
 - **Disclosed limit:** if one person runs it in the demo, it is not an "independent audit".
 - **Confirmed note (v1.0):** in the demo the neutral org runs the Gateway, the Rule Engine and the AI together, so that
-  power is concentrated in one org; this is stated as a limit.
+  power is concentrated in one org; this is stated as a limit. *(Superseded by v1.1 below.)*
+- **Decision (v1.1):** follows Harits's registry setup (`setup_registry.py`, `--rule-engine-operated-by org_observer`):
+  in the demo the **observer** operates the Rule Engine and the AI Audit Agent and registers `ruleEngineSigner`; the
+  neutral org keeps the Gateway (D-26). The Rule Engine is thus not run by the org whose Gateway it audits, and reads its
+  own (pinned) node. The observer also reviews findings, but a review needs both non-commission orgs (threshold 2), so it
+  cannot resolve its own findings alone. The demo limit (one person runs every org) is unchanged.
 
 ### D-26. Gateway operator
 - **Background:** the Gateway operator sits on the path of every ledger record.
@@ -279,3 +307,22 @@
     comparing with its outbox but cannot prevent it (threat model I12). Core signatures are future work.
 - **Confirmed note (v1.0):** demo layout — Gateway = neutral org, pinned node = observer's node (not the Gateway
   operator). Core and the Rule Engine both read that node.
+
+### D-27. Confirmation depth (v1.1)
+- **Background:** contracts v1.0 assumed final blocks ("QBFT blocks are final"; ACCEPTED = "included in a block"). On
+  PureChain a recent block can be replaced by a fork, so "included" is not "final".
+- **Decision**
+  - One more pinned chain value, `confirmation_depth` **D** (provisional **2**), next to chain_id, contract_address and the
+    RPC URLs. A block b is **confirmed** on a node when that node's latest block ≥ b + D.
+  - The Gateway exposes chain-derived data only from confirmed blocks (submission outcomes including REJECTED, finding
+    records, anchors and proofs, indexed chain events, proposal status, registry). It re-broadcasts only the same signed
+    transaction while it is unconfirmed, and treats "already applied" reverts as ACCEPTED / DUPLICATE only on an exact
+    match in confirmed state (chain-interface.md "Confirmations").
+  - Core's creation check and the Rule Engine count a chain item only when the pinned node's latest block ≥ its block + D.
+  - Core retries RETRY_LATER every 1 s for the first 30 s, then with exponential backoff up to 60 s.
+  - **Choosing D:** finality is a protocol property and cannot be proven by measurement. D = max(2, deepest reorg Harits
+    observes in validator stop/restart tests + 1).
+- **Disclosed limit:** D only protects against accidental forks. Two of three validators (in the demo, one person) can
+  rewrite the chain to any depth; this is detected afterwards by R5 and Core comparisons (threat model I15), not prevented.
+- **Affects:** `contracts/chain-interface.md`, `contracts/ledger-gateway.openapi.yaml`, `contracts/README.md`, `.env.example`,
+  `docker-compose.yml`, `docs/threat-model.md` (I15), `docs/test-plan.md` (T07, T10), `docs/roles/*`

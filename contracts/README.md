@@ -1,8 +1,8 @@
-# PureVoting 2.0 — Interface Contracts (v1.0, frozen 2026-10-18)
+# PureVoting 2.0 — Interface Contracts (v1.1, 2026-11-02; v1.0 frozen 2026-10-18)
 
 These files are the single source of truth for how components talk to each other.
 Implement against them; if you need a change, change the contract first (see *Change process*).
-Consistent with the confirmed decisions in `../docs/decisions.md` (v1.0). Threats and known limits: `../docs/threat-model.md`.
+Consistent with the confirmed decisions in `../docs/decisions.md` (v1.1: D-02 PureChain, D-03, D-27 confirmation depth). Threats and known limits: `../docs/threat-model.md`.
 How each defect test (T01–T16; mandatory for the MVP: T01, T02, T04, T05, T08, T15) maps to these contracts: `../docs/test-plan.md`.
 
 | File | Producer | Consumers |
@@ -43,7 +43,7 @@ How each defect test (T01–T16; mandatory for the MVP: T01, T02, T04, T05, T08,
 | Idempotency | `POST /v1/events` by `event_id`; voter endpoints by design (see Core API descriptions); staff create endpoints accept `Idempotency-Key` |
 | Idempotent retries | Findings by `finding_id`, reports by `report_id`, approval decisions and finding reviews by (org, decision, signature), `submitAdminAction` by signature, `tally` when already TALLIED: identical resubmission → 200, different body → 409 |
 | Voter-side storage | Rows about voters (token used, credential, ballot, outbox voter events) store only bucket and checkpoint values, never exact times; their primary keys are random, never serial. Physical insertion order remains visible to DB administrators (threat-model S2) |
-| Timeouts / retries | 5 s per inter-service call. Outbox: exponential backoff 1 s → 60 s, same `event_id` forever. Audit Agent: 10 s per tool call, max 20 steps, then `ABORTED` |
+| Timeouts / retries | 5 s per inter-service call. Outbox: RETRY_LATER retried every 1 s for the first 30 s, then exponential backoff up to 60 s, same `event_id` forever. Audit Agent: 10 s per tool call, max 20 steps, then `ABORTED` |
 | Clocks | Core, Gateway and nodes sync with NTP; tolerated skew 2 s. Window decisions use bucketed times, so skew below one bucket cannot flip R2 |
 | PII | Names, emails, external_ref, raw tokens and raw credentials never appear in ledger events, findings, reports, internal views, or logs. Logs also never contain token/nullifier/receipt hashes, `evr_` IDs, client IP addresses, User-Agent strings, the election private key, raw links or link CSV contents. Staff-only API responses (roster, `target_people`) are the only place names appear |
 
@@ -204,7 +204,7 @@ INCONCLUSIVE `BATCH_NOT_ANCHORED`). If an INCONCLUSIVE cause clears, the Rule En
 supersedes it (the only way at the TALLY checkpoint). Before that — or if the Gateway is unreachable before the rule has read its inputs —
 the Rule Engine produces **no finding** and raises an alert (`POST /internal/v1/audit-alerts`, AUDIT_DELAYED /
 LEDGER_UNAVAILABLE); alerts need no review and do not block finalization. Every rule at `k` evaluates the cumulative data
-of all checkpoints ≤ k. BATCH_NOT_ANCHORED concerns only checks that need anchors (R5); the other rules evaluate the stored events. A manual re-run that produces an identical result (same rule, checkpoint and observed values) is not recorded again. Missing or unreachable evidence is never PASS (INCONCLUSIVE: BATCH_NOT_ANCHORED, NODE_UNAVAILABLE —
+of all checkpoints ≤ k. BATCH_NOT_ANCHORED concerns only checks that need anchors (R5); the other rules evaluate the stored events. A manual re-run that produces an identical result (same rule, checkpoint and observed values) is not recorded again. Chain data counts only from confirmed blocks (chain-interface.md "Confirmations"); an item the pinned node does not show as confirmed yet is treated as not anchored / not available, never as a mismatch. Missing or unreachable evidence is never PASS (INCONCLUSIVE: BATCH_NOT_ANCHORED, NODE_UNAVAILABLE —
 for any rule that reads the chain directly, e.g. R4 registry and R5 anchors —, VIEW_UNAVAILABLE, KEY_NOT_REVEALED). If the Gateway becomes unreachable after a rule has read its inputs and produced its finding, the Rule
 Engine registers the record directly on chain (`submitFindingRecord`) and stores the body at Core once the record is
 indexed (503 until then). The Rule Engine validates each finding body against FindingSubmission and stores it durably before registering it.

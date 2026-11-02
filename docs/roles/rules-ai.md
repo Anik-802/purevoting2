@@ -48,7 +48,7 @@ results.
 | (AI) Core `/internal/v1/*` read + `POST /internal/v1/audit-reports` | `agentKey` | read-only tools + submit report |
 
 **You provide:** nothing that others call. The Rule Engine's signer key is registered on chain as `ruleEngineSigner` by
-the neutral org (D-25).
+the observer org (`org_observer`, D-25 v1.1; the registry setup script's default).
 
 ## 4. Mandatory features (Rule Engine)
 
@@ -64,7 +64,7 @@ the neutral org (D-25).
    - views with `?checkpoint=k`; R5 also reads every committed checkpoint ≤ k;
    - ledger events with `checkpoint_max=k`;
    - rejections with checkpoint ≤ k;
-   - chain values from the pinned node.
+   - chain values from the pinned node — counted only when the node's latest block ≥ the item's block + `confirmation_depth` D (D-27); otherwise treat the item as not anchored / not available yet, never as a mismatch.
 4. **Rules R1–R5** exactly as in the README table: FAIL conditions, "not a FAIL" cases and the `observed` keys.
    - R1: duplicates and state.
    - R2: time — effective end = last accepted WINDOW_CHANGED, capped by an earlier close.
@@ -93,7 +93,7 @@ the neutral org (D-25).
 7. **Re-runs and supersession.** When an INCONCLUSIVE cause clears, re-run the same checkpoint; the later PASS supersedes it. At the TALLY checkpoint this is the only way.
    - A manual re-run with an identical result is not recorded again.
    - A persisting FAIL produces a new FAIL at each later checkpoint. Set `previous_finding_id` to the earlier FAIL of the same rule.
-8. **Chain configuration.** Read only the pinned chain configuration from `.env` (chain id, contract address, pinned node URL). If Gateway `/v1/chain` differs, raise CHAIN_CONFIG_MISMATCH.
+8. **Chain configuration.** Read only the pinned chain configuration from `.env` (chain id, contract address, pinned node URLs, `CONFIRMATION_DEPTH`). `PINNED_NODE_URL` is a comma-separated list (observer first, commission second): try the URLs in order. If Gateway `/v1/chain` differs (including `confirmation_depth`), raise CHAIN_CONFIG_MISMATCH. A direct `submitFindingRecord` counts as recorded only once its block is confirmed.
 
 ## 5. Optional features
 - **AI Audit Agent.**

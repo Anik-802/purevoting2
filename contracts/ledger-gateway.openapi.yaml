@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PureVoting 2.0 — Ledger Gateway API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Owned by the ledger component (Harits). The only way other components touch the blockchain.
     Platform-independent (D-02).
@@ -53,19 +53,23 @@ paths:
       summary: Submit ledger events (core only — other service keys get 403; idempotent by event_id)
       description: |
         Outcomes per event:
-        - ACCEPTED — stored; for a system event this means its contract transaction is included in a block (voter events
-          are anchored later in their batch). While a system event's transaction is still pending, a retry with the same
-          event_id gets RETRY_LATER.
+        - ACCEPTED — stored; for a system event this means its contract transaction is included in a **confirmed** block
+          (latest block ≥ its block + confirmation_depth D, chain-interface.md "Confirmations"; voter events are anchored
+          later in their batch). While a system event's transaction is pending or not yet confirmed, a retry with the same
+          event_id gets RETRY_LATER. Until then the Gateway only re-broadcasts the same signed transaction, never a new one;
+          a revert meaning "already applied" is ACCEPTED / DUPLICATE only on an exact match in confirmed state.
         - DUPLICATE — same event_id with the same payload_hash already stored; treat as success.
         - CONFLICT — same event_id with a different payload_hash; never retried, Core raises an alert.
-        - REJECTED — violates a rule. Recorded in `/v1/rejections`. Not retried. reject_code values:
+        - REJECTED — violates a rule (for a contract revert: only once the reverted transaction is in a confirmed block; the
+          revert → reject_code mapping is in chain-interface.md "Confirmations"). Recorded in `/v1/rejections`. Not retried.
+          reject_code values:
           ELECTION_NOT_OPEN (voter event outside the effective window, by the bucket formula of README R2),
           DUPLICATE_CONTENT (token_hash / nullifier_hash already accepted), TOKEN_REVOKED (TOKEN_USED for a revoked
           token), TOKEN_ALREADY_USED (TOKEN_REVOKED for a token with an accepted TOKEN_USED), INVALID_STATE_TRANSITION,
           SIGNATURE_INVALID, ORG_NOT_REGISTERED, ALREADY_EXECUTED (second ADMIN_ACTION_EXECUTED for a proposal).
         - RETRY_LATER — seq gap, prerequisite missing (e.g. voter event before ELECTION_OPENED is applied), or a block-time
           precondition not reached yet (TIME_NOT_REACHED, e.g. ELECTION_OPENED a few seconds before window_start by the chain clock).
-          Retry with exponential backoff (1 s → 60 s).
+          Retry every 1 s for the first 30 s, then with exponential backoff up to 60 s.
 
         Delivery order (contract for the Core outbox worker): the release unit is the time bucket. At the end of
         bucket b the worker releases, in this order, (1) all voter events created in b, shuffled, then (2) all system
@@ -631,10 +635,14 @@ paths:
                 type: object
                 required: [platform, chain_id, contract_address, interface_version, rpc_urls]
                 properties:
-                  platform: { type: string, enum: [besu, fabric, other] }
+                  platform: { type: string, enum: [besu, fabric, other], description: PureChain (D-02 C) reports other }
                   chain_id: { type: string }
                   contract_address: { type: string, description: Address (Besu) or chaincode name (Fabric) implementing chain-interface.md }
-                  interface_version: { type: string, pattern: '^\d+\.\d+\.\d+$' }
+                  interface_version: { type: string, pattern: '^\d+\.\d+\.\d+$', description: Version of chain-interface.md implemented (1.1.0 for contracts v1.1) }
+                  confirmation_depth:
+                    type: integer
+                    minimum: 0
+                    description: Blocks required on top of a block before the Gateway treats it as confirmed (D-27). Readers compare it with their pinned value (CHAIN_CONFIG_MISMATCH)
                   rpc_urls:
                     type: array
                     minItems: 1
