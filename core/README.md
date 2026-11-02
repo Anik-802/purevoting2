@@ -18,6 +18,7 @@ Implements `contracts/core-api.openapi.yaml`. Role design: `docs/roles/core-web.
 | `app/hashing.py` | `contracts/hashing.md` (H, Hc, Merkle, roots, signature digests) |
 | `app/scripts/create_staff.py` | staff-account setup script (no account API) |
 | `devtools/fake_gateway.py` | stateful stand-in Gateway for tests and local runs before week 3 |
+| `devtools/demo_flow.py` | real-time demo of one election, creation to close (about 3 minutes, Korean output) |
 | `db/init/` | first-start DB setup: roles, schemas `credential` / `ballot`, tables, SECURITY DEFINER ballot functions |
 | `tests/` | unit tests (39 hash vectors, …) and `test_flow_db.py` (week 2 path on a real DB) |
 
@@ -32,6 +33,9 @@ TEST_DATABASE_URL=postgresql+psycopg://pv2_core:<DB_CORE_PASSWORD>@127.0.0.1:543
 docker compose --profile mock up --build
 docker compose exec -e STAFF_PASSWORD=... core python -m app.scripts.create_staff --username admin1 --org org_commission --role admin
 # then http://127.0.0.1:8000/docs
+
+# real-time demo against the running stack: create → roster → freeze → links → open → vote → close → anchors
+docker compose exec core python -m devtools.demo_flow
 ```
 
 The DB init scripts run only when the `pgdata` volume is empty; after changing them use `docker compose down -v`.
