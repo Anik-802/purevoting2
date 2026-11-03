@@ -140,6 +140,7 @@ check("status ROSTER_FROZEN", [c.call("electionState", E)[0], c.call("electionSt
 rev("freeze twice", c.send("freezeRoster", E, RH, 3, sender=GW), "InvalidStateTransition")
 rev("open before window start", c.send("openElection", E, 3, sender=GW), "TimeNotReached")
 ok("commitCheckpoint 0 (STATE_CHANGE) while frozen", c.send("commitCheckpoint", E, 0, 1, idh("tables-0"), 3, sender=GW))
+rev("CLOSE_FINAL while ROSTER_FROZEN", c.send("commitCheckpoint", E, 1, 2, idh("t"), 4, sender=GW), "InvalidStateTransition")
 check("snapshot 0", c.call("electionStateAtCheckpoint", E, 0), [1, END, RH, ZERO, ZERO, 3])
 
 C = idh("election-C")   # second election with the same window: used for the tally checks
@@ -155,6 +156,7 @@ rev("checkpoint 0 again", c.send("commitCheckpoint", E, 0, 0, idh("t"), 5, sende
 rev("checkpoint with reason 4", c.send("commitCheckpoint", E, 3, 4, idh("t"), 5, sender=GW), "InvalidReason")
 rev("checkpoint for unknown election", c.send("commitCheckpoint", idh("nope"), 1, 0, idh("t"), 1, sender=GW), "ElectionNotFound")
 ok("commitCheckpoint 3 (PERIODIC)", c.send("commitCheckpoint", E, 3, 0, idh("tables-3"), 5, sender=GW))
+rev("CLOSE_FINAL while OPEN", c.send("commitCheckpoint", E, 4, 2, idh("t"), 6, sender=GW), "InvalidStateTransition")
 check("snapshot 3", c.call("electionStateAtCheckpoint", E, 3), [2, END, RH, ZERO, ZERO, 5])
 check("lastCheckpoint", c.call("electionState", E)[8], 3)
 check("never committed checkpoint reads zeros", c.call("electionStateAtCheckpoint", E, 2)[1], 0)

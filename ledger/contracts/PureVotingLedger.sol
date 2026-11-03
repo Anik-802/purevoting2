@@ -331,8 +331,12 @@ contract PureVotingLedger {
         if (e.status == FINALIZED || e.status == VOIDED) revert InvalidStateTransition();
         if (reason > 3) revert InvalidReason();
         if (e.hasCheckpoint && checkpoint <= e.lastCheckpoint) revert CheckpointNotIncreasing();
-        // assumption: one CLOSE_FINAL checkpoint per election; publishTally refers to it
-        if (reason == 2 && e.hasCloseFinal) revert CloseFinalAlreadyCommitted();
+        // approved by the team lead (Nov 2): CLOSE_FINAL only while the election is CLOSED, and only once;
+        // publishTally refers to it
+        if (reason == 2) {
+            if (e.status != CLOSED) revert InvalidStateTransition();
+            if (e.hasCloseFinal) revert CloseFinalAlreadyCommitted();
+        }
         _advanceSeq(e, coreSeq);
         e.hasCheckpoint = true;
         e.lastCheckpoint = checkpoint;

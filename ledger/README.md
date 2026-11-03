@@ -1,8 +1,4 @@
-# ledger/ — Smart contract, validator nodes and Ledger Gateway (owner: Harits)
-
-Implements `contracts/chain-interface.md` and `contracts/ledger-gateway.openapi.yaml`. Role design: `docs/roles/ledger.md`.
-
-## Contract status (stage 3a)
+# ledger/ (stage 3a: contract skeleton with anchors and tally)
 
 `contracts/PureVotingLedger.sol` implements part of `contracts/chain-interface.md` (v1.0):
 
@@ -48,3 +44,8 @@ against the nodes from the PureChain test kit.
    Also: `bucketMin <= bucketMax`, mode 0 or 1, and the batched rule is checked against the stored (effective) `windowEnd`.
 9. At most one checkpoint per election with reason CLOSE_FINAL; `publishTally` needs it to exist and `finalCheckpoint` to equal it.
    The TALLY checkpoint (reason 3) is not restricted by the contract; R3 and R5 check it.
+10. A CLOSE_FINAL checkpoint is accepted only while the election status is CLOSED (condition added by the team lead).
+
+Items 1 to 9 were approved by the team lead on Nov 2, together with item 10. Checkpoint numbering starts at 0;
+`hasCheckpoint` (stored per election) tells "checkpoint 0 committed" from "no checkpoint yet" and is what
+`submitFindingRecord` will use once it exists.
