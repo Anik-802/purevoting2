@@ -4,8 +4,8 @@
     docker compose exec core python -m devtools.demo_flow
 
 It talks to Core over HTTP exactly as the admin web and the voter web will (login, create, roster, freeze, links,
-redeem, ballot, receipt) and prints each step with what Core answered. The Gateway is the fake one (no chain), and the
-creation check runs in stub mode (CREATION_CHECK_MODE=stub, the compose default until week 3). It creates a throwaway
+redeem, ballot, receipt) and prints each step with what Core answered. The Gateway is the fake one (no chain); the
+creation check reads its /rpc node stand-in (PINNED_NODE_URL=http://ledger-gateway:8100/rpc in .env). It creates a throwaway
 admin account with a random password; no secrets are printed.
 """
 import base64

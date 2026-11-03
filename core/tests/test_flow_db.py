@@ -11,6 +11,7 @@ import secrets
 import time
 from urllib.parse import urlparse
 
+import httpx
 import nacl.public
 import pytest
 from fastapi.testclient import TestClient
@@ -20,8 +21,9 @@ URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL not set")
 
 if URL:
-    from app import db, hashing, outbox
+    from app import creation_check, db, hashing, outbox
     from app.auth import hash_password
+    from app.chain import NodeReader, set_reader
     from app.config import settings
     from app.gateway import GatewayClient, set_gateway
     from app.ids import ulid
@@ -66,6 +68,8 @@ def deliver_until_idle(*eids):
     for _ in range(20):
         outbox._backoff.clear()
         outbox.deliver_all(list(eids))
+        for eid in eids:
+            creation_check.check(eid)       # the scheduler's part between deliveries
 
 
 def outbox_rows(eid):
@@ -315,13 +319,168 @@ def test_gateway_4xx_raises_alert(env):
     assert c.get(f"/v1/elections/{eid}", headers=auth).json()["creation_check"] == "PENDING"
 
 
-def test_node_mode_keeps_creation_check_pending(env):
-    c, auth, t0 = env["client"], env["auth"], env["t0"]
+
+
+# ---- creation check against the pinned node stand-in (fake_gateway /rpc), CREATION_CHECK_MODE=node ----
+
+PINNED = ["http://a/rpc", "http://b/rpc"]
+
+
+class _Nodes:
+    """HTTP client for the reader: two pinned nodes in front of the fake node, each with a test-chosen behaviour."""
+    def __init__(self):
+        self.client = TestClient(fake_gateway.app)
+        self.modes = {"a": "down", "b": "ok"}     # default: the first URL is down, the reader falls through
+
+    def post(self, url, json=None, **kw):
+        mode, method = self.modes[urlparse(url).hostname], json["method"]
+        if mode == "down":
+            raise httpx.ConnectError("refused")
+        if mode == "lagging" and method == "eth_blockNumber":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": hex(fake_gateway.state.block)})
+        if mode == "call_error" and method == "eth_call":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "x"}})
+        if mode == "garbage" and method == "eth_call":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": "0xzz"})
+        return self.client.post("http://testserver/rpc", json=json)
+
+
+@pytest.fixture()
+def node(env):
     settings.creation_check_mode = "node"
-    eid = _create(c, auth, t0, title="Node").json()["election_id"]
+    # fixed values (the container's own .env may hold placeholders)
+    settings.chain_id = fake_gateway.state.chain_id = "7777"
+    settings.contract_address = fake_gateway.state.contract_address = "0x" + "cc" * 20
+    settings.confirmation_depth = fake_gateway.state.confirmation_depth = 2
+    settings.pinned_node_url = ",".join(PINNED)
+    fake_gateway.state.rpc_urls = list(PINNED)
+    creation_check._since.clear()
+    creation_check._config_checked.clear()
+    nodes = _Nodes()
+    set_reader(NodeReader(urls=PINNED, contract=fake_gateway.state.contract_address, http=nodes))
+    yield dict(env, nodes=nodes)
+    set_reader(None)
+    settings.creation_check_mode = "stub"
+    settings.pinned_node_url = ""
+
+
+def _created(c, auth, t0, title):
+    eid = _create(c, auth, t0, title=title).json()["election_id"]
     clock.frozen = t0 + B
     deliver_until_idle(eid)
+    return eid
+
+
+def _check(c, auth, eid):
     scheduler_tick([eid])
     e = c.get(f"/v1/elections/{eid}", headers=auth).json()
-    assert e["transition"]["ledger_status"] == "ACCEPTED" and e["creation_check"] == "PENDING"
+    kinds = [a["kind"] for a in c.get(f"/v1/elections/{eid}/audit-alerts", headers=auth).json()["items"]]
+    return e["creation_check"], kinds
+
+
+def _detail(c, auth, eid):
+    return c.get(f"/v1/elections/{eid}/audit-alerts", headers=auth).json()["items"][0]["detail"]
+
+
+def test_node_mode_passes_once_confirmed(node):
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    fake_gateway.state.node_ahead = 1                        # block + 1 < block + D: not confirmed on the node yet
+    eid = _created(c, auth, t0, "Node")
+    assert _check(c, auth, eid) == ("PENDING", [])
     assert c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth).status_code == 409
+    creation_check._since.clear()                            # Core restarted: the PENDING check is picked up again
+    creation_check._config_checked.clear()
+    fake_gateway.state.node_ahead = 2
+    assert _check(c, auth, eid) == ("PASSED", [])
+
+
+def test_node_mode_mismatch_names_the_fields(node):
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    fake_gateway.state.node_tamper = {"approval_threshold": 1, "window_end": t0 + 9999}
+    eid = _created(c, auth, t0, "Tampered")
+    assert _check(c, auth, eid) == ("MISMATCH", ["GOVERNANCE_MISMATCH"])
+    assert _detail(c, auth, eid) == "differs: window_end, approval_threshold"
+    assert c.post(f"/v1/elections/{eid}:delete", headers=auth).status_code == 204
+
+
+def test_node_mode_org_order_is_checked(node):
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    orgs = sorted(["org_commission", "org_neutral", "org_observer"])
+    fake_gateway.state.node_tamper = {"org_ids": [fake_gateway._idh(o) for o in reversed(orgs)]}   # same set, other order
+    eid = _created(c, auth, t0, "Order")
+    assert _check(c, auth, eid) == ("MISMATCH", ["GOVERNANCE_MISMATCH"])
+    assert _detail(c, auth, eid) == "differs: org_ids"
+
+
+def test_node_mode_not_found_after_grace(node):
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    fake_gateway.state.node_tamper = {"config_hash": "0" * 64}   # the node reads the election as missing
+    eid = _created(c, auth, t0, "Missing")
+    assert _check(c, auth, eid) == ("PENDING", [])
+    clock.frozen += 59
+    assert _check(c, auth, eid) == ("PENDING", [])
+    clock.frozen += 1
+    assert _check(c, auth, eid) == ("MISMATCH", ["GOVERNANCE_MISMATCH"])
+    assert _detail(c, auth, eid) == "not found"
+
+
+def test_node_mode_never_mixes_nodes(node):
+    """Node a is confirmed but its eth_call fails; node b lags. Reading a's block number with b's state would turn the
+    delay into 'not found'; one reading comes from one node, so the check just waits."""
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    node["nodes"].modes = {"a": "call_error", "b": "lagging"}
+    eid = _created(c, auth, t0, "Mixed")
+    for _ in range(3):
+        clock.frozen += 61
+        assert _check(c, auth, eid) == ("PENDING", [])
+    node["nodes"].modes = {"a": "lagging", "b": "ok"}        # a answers but is stuck: b, which confirmed, decides
+    assert _check(c, auth, eid) == ("PASSED", [])
+
+
+def test_node_mode_malformed_answers(node):
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    node["nodes"].modes = {"a": "garbage", "b": "ok"}          # a malformed result moves on to the next node
+    eid = _created(c, auth, t0, "Garbage")
+    assert _check(c, auth, eid) == ("PASSED", [])
+    node["nodes"].modes = {"a": "garbage", "b": "garbage"}
+    eid = _created(c, auth, t0, "Garbage2")
+    assert _check(c, auth, eid) == ("PENDING", [])
+    clock.frozen += 60
+    assert _check(c, auth, eid) == ("PENDING", ["LEDGER_UNAVAILABLE"])
+    clock.frozen += 30
+    assert _check(c, auth, eid) == ("PENDING", ["LEDGER_UNAVAILABLE"])   # raised once
+
+
+def test_node_mode_unreachable_alerts_then_recovers(node):
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    fake_gateway.state.node_down = True
+    eid = _created(c, auth, t0, "Down")
+    assert _check(c, auth, eid) == ("PENDING", [])
+    clock.frozen += 60
+    assert _check(c, auth, eid) == ("PENDING", ["LEDGER_UNAVAILABLE"])
+    fake_gateway.state.node_down = False
+    assert _check(c, auth, eid)[0] == "PASSED"
+
+
+def test_node_mode_starts_from_duplicate(node):
+    """ELECTION_CREATED answered DUPLICATE (Core retried after a lost answer) also starts the check."""
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    fake_gateway.state.node_ahead = 0
+    eid = _created(c, auth, t0, "Dup")
+    with db.get_engine().begin() as conn:                     # as if the ACCEPTED answer had been lost
+        conn.execute(text("UPDATE credential.outbox SET status = 'PENDING' WHERE election_id = :e"), {"e": eid})
+        conn.execute(text("UPDATE credential.elections SET created_block = NULL WHERE election_id = :e"), {"e": eid})
+    fake_gateway.state.node_ahead = 2
+    deliver_until_idle(eid)
+    assert [r["status"] for r in outbox_rows(eid)] == ["DUPLICATE"]
+    assert _check(c, auth, eid) == ("PASSED", [])
+
+
+def test_gateway_chain_config_differs(node):
+    c, auth, t0 = node["client"], node["auth"], node["t0"]
+    fake_gateway.state.confirmation_depth = 5                # the Gateway reports another D than the pinned one
+    fake_gateway.state.rpc_urls = ["http://a/rpc"]           # and does not list the second pinned node
+    fake_gateway.state.chain_id = hex(int(settings.chain_id))   # the same chain id written in hex: no difference
+    eid = _created(c, auth, t0, "Config")
+    assert _check(c, auth, eid) == ("PASSED", ["CHAIN_CONFIG_MISMATCH"])   # alert only; the pinned values are used
+    assert _detail(c, auth, eid) == "Gateway /v1/chain differs: confirmation_depth, rpc_urls"

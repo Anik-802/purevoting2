@@ -32,11 +32,10 @@ def scheduler_tick(only: list[str] | None = None) -> None:
         if only is not None and eid not in only:
             continue
         try:
+            creation_check.check(eid)       # retried until the pinned node answers; reads outside the lock
             with db.get_engine().begin() as conn:
                 e = load_election(conn, eid, lock=True)
-                now = timeutil.clock.now()
-                creation_check.apply(conn, e, now)      # retried until the pinned node answers
-                advance(conn, e, now)
+                advance(conn, e, timeutil.clock.now())
         except Exception:   # noqa: BLE001
             log.exception("scheduler failed for an election")
 

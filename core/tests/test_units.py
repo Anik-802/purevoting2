@@ -3,6 +3,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from app import elections, ids
 from app.timeutil import ceil_bucket, floor_bucket, iso, parse_iso, system_bucket_start
 
@@ -41,3 +43,99 @@ def test_link_csv_has_the_contract_columns():
     text = elections.to_csv([{"external_ref": "s1", "name": "Kim", "link": "http://x/vote/elc_1#t=abc"}])
     assert text.splitlines()[0] == "external_ref,name,link"
     assert elections.to_csv([]) == ""
+
+
+def test_retry_later_schedule():
+    """RETRY_LATER: every 1 s for the first 30 s, then exponential up to 60 s (contracts v1.1)."""
+    from app import outbox
+    outbox._backoff.clear()
+    t, waits = 1000, []
+    while t < 1000 + 300:
+        outbox._delay("elc_x", t, retry_later=True)
+        nxt = outbox._backoff["elc_x"][0]
+        waits.append(nxt - t)
+        t = nxt
+    assert waits[:30] == [1] * 30 and waits[30:36] == [2, 4, 8, 16, 32, 60] and set(waits[36:]) == {60}
+    # Gateway unavailable: exponential from the start; a later RETRY_LATER run starts its own 30 s of 1 s retries
+    outbox._backoff.clear()
+    for t in (0, 1, 3, 7):
+        outbox._delay("elc_y", t)
+    assert outbox._backoff["elc_y"][1] == 8
+    outbox._delay("elc_y", 15, retry_later=True)
+    assert outbox._backoff["elc_y"][:2] == (16, 1)
+    outbox._backoff.clear()
+
+
+def _idh(s: str) -> str:
+    import hashlib
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+def _reader(http):
+    from app.chain import NodeReader
+    from devtools import fake_gateway
+    return NodeReader(urls=["http://testserver/rpc"], contract=fake_gateway.state.contract_address, http=http)
+
+
+def test_pinned_node_urls_and_decoding():
+    """PINNED_NODE_URL is a list; the reader decodes what an EVM node returns for the two getters (fake node encodes)."""
+    from fastapi.testclient import TestClient
+
+    from app.chain import NodeUnavailable
+    from app.config import Settings
+    from devtools import fake_gateway
+
+    assert Settings(pinned_node_url=" http://a:8545 , http://b:8545,").pinned_node_urls == ["http://a:8545", "http://b:8545"]
+    fake_gateway.state = fake_gateway.State()
+    fake_gateway.state.events["evt_1"] = {
+        "type": "ELECTION_CREATED", "election_id": "elc_1", "anchor": {},
+        "payload": {"config_hash": "ab" * 32, "window_start": "2026-11-02T10:00:00Z", "window_end": "2026-11-02T12:00:00Z",
+                    "time_bucket_seconds": 60, "checkpoint_interval_seconds": 120, "approval_threshold": 2,
+                    "organizations": [{"org_id": "org_observer"}, {"org_id": "org_commission"}],
+                    "operator_org": "org_commission", "proposal_ttl_hours": 24}}
+    r = _reader(TestClient(fake_gateway.app))
+    assert r.read_election("elc_1", 100, 3) == (102, None, None)           # 102 < 100 + 3: not confirmed there yet
+    latest, s, g = r.read_election("elc_1", 100, 2)
+    assert latest == 102 and s["config_hash"] == "ab" * 32 and s["window_end"] - s["window_start"] == 7200
+    assert s["time_bucket_seconds"] == 60 and s["operator_org_id"] == g["operator_org_id"] == _idh("org_commission")
+    assert g["org_ids"] == [_idh("org_commission"), _idh("org_observer")]
+    assert (g["approval_threshold"], g["proposal_ttl_hours"], g["checkpoint_interval_seconds"]) == (2, 24, 120)
+    _, s, g = r.read_election("elc_unknown", 100, 2)
+    assert int(s["config_hash"], 16) == 0 and g["org_ids"] == []
+    fake_gateway.state.node_down = True
+    with pytest.raises(NodeUnavailable):
+        r.read_election("elc_1", 100, 2)
+    fake_gateway.state = fake_gateway.State()
+
+
+def test_malformed_node_answers_are_unavailable():
+    """Anything malformed (JSON-RPC error in a 200, non-hex, offset inside the head, out-of-range values) is
+    NodeUnavailable, never an exception that would roll back the caller."""
+    import httpx
+
+    from app.chain import NodeUnavailable, _Bad, decode_governance, decode_state
+
+    def answering(result_for):
+        class Http:
+            def post(self, url, json=None, **kw):
+                return httpx.Response(200, json=result_for(json["method"]))
+        return _reader(Http())
+
+    block = {"jsonrpc": "2.0", "id": 1, "result": "0x100"}
+    for bad in ({"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "x"}},
+                {"jsonrpc": "2.0", "id": 1, "result": None}, {"jsonrpc": "2.0", "id": 1, "result": "0xzz"},
+                {"jsonrpc": "2.0", "id": 1, "result": "0x" + "00" * 31}, ["not", "an", "object"]):
+        with pytest.raises(NodeUnavailable):
+            answering(lambda m, bad=bad: block if m == "eth_blockNumber" else bad).read_election("elc_1", 1, 2)
+    with pytest.raises(NodeUnavailable):
+        answering(lambda m: {"jsonrpc": "2.0", "id": 1, "result": "latest"}).read_election("elc_1", 1, 2)
+
+    with pytest.raises(_Bad):                      # orgIds offset pointing into the head
+        decode_governance([0x20, 2, 0, 24, 60, 0])
+    with pytest.raises(_Bad):                      # approvalThreshold beyond uint8
+        decode_governance([0xa0, 256, 0, 24, 60, 0])
+    with pytest.raises(_Bad):                      # array length beyond the data
+        decode_governance([0xa0, 2, 0, 24, 60, 3, 1])
+    with pytest.raises(_Bad):                      # timeBucketSeconds beyond uint32
+        decode_state([0, 1, 2, 2**32, 0, 0, 0, 0, 0, 0, 0])
+    assert decode_governance([0xa0, 2, 0, 24, 60, 1, 7])["org_ids"] == [format(7, "064x")]

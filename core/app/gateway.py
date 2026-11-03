@@ -46,6 +46,19 @@ class GatewayClient:
             raise GatewayUnavailable(f"HTTP {r.status_code}")
         return r.json()["results"]
 
+    def chain(self) -> dict:
+        """GET /v1/chain (convenience only: compared with the pinned configuration, never used instead of it)."""
+        r = self._get("/v1/chain")
+        if r.status_code != 200:
+            raise GatewayUnavailable(f"HTTP {r.status_code}")
+        try:
+            body = r.json()
+        except ValueError:
+            raise GatewayUnavailable("GET /v1/chain: not JSON") from None
+        if not isinstance(body, dict):
+            raise GatewayUnavailable("GET /v1/chain: not an object")
+        return body
+
     def organizations(self) -> list[dict]:
         r = self._get("/v1/organizations")
         if r.status_code != 200:

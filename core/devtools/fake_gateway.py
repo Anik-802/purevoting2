@@ -4,11 +4,13 @@ implementation: no chain, no signature checks, anchors are pretend).
     uvicorn devtools.fake_gateway:app --port 8100      (from core/)
 
 It follows the parts of ledger-gateway.openapi.yaml that Core depends on: per-event outcomes of POST /v1/events
-(seq order, DUPLICATE / CONFLICT by event_id, voter events wait for ELECTION_OPENED), the organization registry and
-finding records.
+(seq order, DUPLICATE / CONFLICT by event_id, voter events wait for ELECTION_OPENED), the organization registry,
+finding records and GET /v1/chain. POST /rpc stands in for the pinned node of the creation check
+(PINNED_NODE_URL=http://ledger-gateway:8100/rpc with CREATION_CHECK_MODE=node).
 """
 import hashlib
 import json
+import os
 import secrets
 
 from fastapi import FastAPI, Request
@@ -31,6 +33,15 @@ class State:
         self.records: dict[str, dict] = {}      # finding_id -> FINDING_RECORDED event
         self.received: list[dict] = []          # every submission, in arrival order (tests check delivery order)
         self.fail_status: int | None = None     # tests: answer POST /v1/events with this HTTP status
+        # pinned chain configuration it reports, and the node stand-in (/rpc)
+        self.chain_id = os.environ.get("CHAIN_ID", "7777")
+        self.contract_address = os.environ.get("CONTRACT_ADDRESS", "0x" + "cc" * 20)
+        self.confirmation_depth = int(os.environ.get("CONFIRMATION_DEPTH", "2"))
+        self.node_ahead = self.confirmation_depth   # node's latest block = last included block + this
+        self.node_down = False
+        self.node_tamper: dict = {}             # tests: on-chain fields that differ from ELECTION_CREATED
+        self.rpc_urls = [u.strip() for u in os.environ.get("PINNED_NODE_URL", "").split(",") if u.strip()] \
+            or ["http://ledger-gateway:8100/rpc"]
 
 
 state = State()
@@ -53,8 +64,10 @@ async def submit(request: Request):
         eid, el = ev["event_id"], ev["election_id"]
         old = state.events.get(eid)
         if old is not None:
-            results.append({"event_id": eid, "status": "DUPLICATE" if old["payload_hash"] == ev["payload_hash"]
-                            else "CONFLICT"})
+            res = {"event_id": eid, "status": "DUPLICATE" if old["payload_hash"] == ev["payload_hash"] else "CONFLICT"}
+            if res["status"] == "DUPLICATE" and "anchor" in old and not eid.startswith("evr_"):
+                res |= {"tx_hash": old["anchor"]["tx_hash"], "block_number": old["anchor"]["block_number"]}
+            results.append(res)
             continue
         voter = eid.startswith("evr_")
         if voter and el not in state.opened:
@@ -126,3 +139,76 @@ def finding_records(election_id: str, limit: int = 100, cursor: str | None = Non
 @app.get("/v1/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/v1/chain")
+def chain():
+    return {"platform": "other", "chain_id": state.chain_id, "contract_address": state.contract_address,
+            "interface_version": "1.1.0", "rpc_urls": state.rpc_urls,
+            "confirmation_depth": state.confirmation_depth}
+
+
+# ---- pinned node stand-in: JSON-RPC for the creation check (eth_blockNumber, eth_call of two getters) ----
+# The "chain" holds what an accepted ELECTION_CREATED would have written; tests can make the node lag, go down or
+# hold different values. Encoding is written here independently of app/chain.py so the two check each other.
+
+SEL_STATE, SEL_GOVERNANCE = "19dfd414", "cbce74a6"   # electionState(bytes32), electionGovernance(bytes32)
+
+
+def _idh(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+def _unix(iso_z: str) -> int:
+    from datetime import datetime
+    return int(datetime.fromisoformat(iso_z.replace("Z", "+00:00")).timestamp())
+
+
+def _word(v) -> str:
+    return v.rjust(64, "0") if isinstance(v, str) else format(v, "064x")
+
+
+def _on_chain(election_id_h: str) -> dict | None:
+    for ev in state.events.values():
+        if ev["type"] == "ELECTION_CREATED" and "anchor" in ev and _idh(ev["election_id"]) == election_id_h:
+            p = ev["payload"]
+            onchain = {"config_hash": p["config_hash"], "window_start": _unix(p["window_start"]),
+                       "window_end": _unix(p["window_end"]), "time_bucket_seconds": p["time_bucket_seconds"],
+                       "checkpoint_interval_seconds": p["checkpoint_interval_seconds"],
+                       "org_ids": [_idh(o["org_id"]) for o in sorted(p["organizations"], key=lambda o: o["org_id"])],
+                       "approval_threshold": p["approval_threshold"], "operator_org_id": _idh(p["operator_org"]),
+                       "proposal_ttl_hours": p["proposal_ttl_hours"]}
+            return onchain | state.node_tamper
+    return None
+
+
+def _eth_call(data: str) -> str:
+    sel, arg = data[2:10], data[10:74]
+    e = _on_chain(arg)
+    if sel == SEL_STATE:
+        if e is None:
+            return "0x" + "0" * 64 * 11                  # unknown election: all zeros (configHash == 0)
+        words = [0, e["window_start"], e["window_end"], e["time_bucket_seconds"], e["config_hash"], 0, 0, 0, 0, 0,
+                 e["operator_org_id"]]
+    elif sel == SEL_GOVERNANCE:
+        if e is None:
+            return "0x" + _word(5 * 32) + "0" * 64 * 5    # empty orgIds
+        words = [5 * 32, e["approval_threshold"], e["operator_org_id"], e["proposal_ttl_hours"],
+                 e["checkpoint_interval_seconds"], len(e["org_ids"])] + e["org_ids"]
+    else:
+        raise ValueError("unknown selector")
+    return "0x" + "".join(_word(w) for w in words)
+
+
+@app.post("/rpc")
+async def rpc(request: Request):
+    if state.node_down:
+        return JSONResponse({"error": "down"}, status_code=503)
+    b = await request.json()
+    if b["method"] == "eth_blockNumber":
+        result = hex(state.block + state.node_ahead)
+    elif b["method"] == "eth_call" and b["params"][0]["to"].lower() == state.contract_address.lower():
+        result = _eth_call(b["params"][0]["data"])
+    else:
+        return {"jsonrpc": "2.0", "id": b.get("id"), "error": {"code": -32601, "message": "not supported"}}
+    return {"jsonrpc": "2.0", "id": b.get("id"), "result": result}

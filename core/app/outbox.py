@@ -9,7 +9,7 @@ import random
 
 from sqlalchemy import text
 
-from app import creation_check, timeutil
+from app import timeutil
 from app.db import get_engine
 from app.gateway import GatewayRefused, GatewayUnavailable, get_gateway
 from app.store import load_election, raise_alert, set_status
@@ -26,13 +26,24 @@ STOP_ON_REJECT = ("ROSTER_AMENDED", "TOKEN_BATCH_ISSUED", "TOKEN_REVOKED", "ADMI
 # both with an alert and without stopping the FIFO (README "Consistency model")
 
 # per-election retry backoff, kept in memory (outbox voter rows must not carry exact times)
-_backoff: dict[str, tuple[int, int]] = {}   # election_id -> (next_try_at, delay)
+# election_id -> (next_try_at, delay, retry_later_since or None)
+_backoff: dict[str, tuple[int, int, int | None]] = {}
+FAST_RETRY = 30   # RETRY_LATER: every 1 s for the first 30 s (a block + D confirmations), then exponential (v1.1)
 
 
-def _delay(eid: str, now: int) -> None:
-    _, d = _backoff.get(eid, (0, 0))
-    d = min(60, max(1, d * 2))
-    _backoff[eid] = (now + d, d)
+def _delay(eid: str, now: int, retry_later: bool = False) -> None:
+    """Gateway unavailable / refused: exponential 1 s → 60 s. RETRY_LATER: 1 s for FAST_RETRY seconds from the first
+    RETRY_LATER of the current run, then exponential up to 60 s (contracts README "Timeouts / retries")."""
+    _, d, since = _backoff.get(eid, (0, 0, None))
+    if not retry_later:
+        since = None
+    elif since is None:
+        since, d = now, 0
+    if retry_later and now - since < FAST_RETRY:
+        d = 1
+    else:
+        d = min(60, max(1, d * 2))
+    _backoff[eid] = (now + d, d, since)
 
 
 def next_unit(conn, e: dict, now: int) -> list[dict]:
@@ -57,7 +68,7 @@ def next_unit(conn, e: dict, now: int) -> list[dict]:
 def deliver(election_id: str) -> bool:
     """One delivery step for one election. Returns True if something was sent."""
     now = timeutil.clock.now()
-    nt, _ = _backoff.get(election_id, (0, 0))
+    nt, _, _ = _backoff.get(election_id, (0, 0, 0))
     if now < nt:
         return False
     engine = get_engine()
@@ -97,7 +108,7 @@ def deliver(election_id: str) -> bool:
                 else:
                     retry = True
         if retry:
-            _delay(election_id, now)
+            _delay(election_id, now, retry_later=True)
             return True
         if e["fifo_stopped"]:     # an outcome in this chunk stopped the FIFO: send nothing more
             return True
@@ -118,8 +129,7 @@ def apply_outcome(conn, e: dict, event: dict, res: dict, now: int) -> None:
         if type_ == "ELECTION_CREATED":
             conn.execute(text("UPDATE credential.elections SET created_block = :b WHERE election_id = :e"),
                          {"b": res.get("block_number"), "e": eid})
-            e["created_block"] = res.get("block_number")
-            creation_check.apply(conn, e, now)
+            e["created_block"] = res.get("block_number")   # the scheduler runs the creation check from here
         elif type_ == "ELECTION_OPENED":
             set_status(conn, e, "OPEN", k)
             conn.execute(text("UPDATE credential.elections SET open_event_id = NULL WHERE election_id = :e"), {"e": eid})

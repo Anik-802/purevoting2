@@ -38,7 +38,7 @@ services:
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
       PINNED_NODE_URL: ${PINNED_NODE_URL:-}
       CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}   # D-27; Gateway and Rule Engine blocks pass it too
-      CREATION_CHECK_MODE: ${CREATION_CHECK_MODE:-stub}   # dev stub until week 3 (role design); "node" for T01
+      CREATION_CHECK_MODE: ${CREATION_CHECK_MODE:-node}   # reads the pinned node; "stub" (dev only) assumes it matches
       VOTER_WEB_URL: ${VOTER_WEB_URL:-http://127.0.0.1:5173}
     depends_on:
       db:
@@ -59,6 +59,11 @@ services:
       context: .
       dockerfile: core/Dockerfile
     command: ["uvicorn", "devtools.fake_gateway:app", "--host", "0.0.0.0", "--port", "8100", "--no-access-log"]
+    environment:   # the same pinned chain configuration as Core (GET /v1/chain and the /rpc node stand-in)
+      CHAIN_ID: ${CHAIN_ID:-}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
+      CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}
+      PINNED_NODE_URL: ${PINNED_NODE_URL:-}   # mock: http://ledger-gateway:8100/rpc
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8100}:8100"
 
