@@ -36,3 +36,9 @@ def validator(file: str, definition: str) -> Draft202012Validator:
 def errors(file: str, definition: str, instance) -> list[str]:
     return [f"{'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message}"[:200]
             for e in validator(file, definition).iter_errors(instance)]
+
+
+@lru_cache
+def enum(file: str, definition: str) -> frozenset:
+    """The allowed values of an enum definition, e.g. enum("common.schema.json", "RuleId")."""
+    return frozenset(json.loads((contracts_dir() / file).read_text(encoding="utf-8"))["$defs"][definition]["enum"])

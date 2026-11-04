@@ -1,0 +1,56 @@
+# Integration stack (week 3 T01 onward), on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
+# Bootstrap order (docs/system-design.md section 7, #6): nodes → contract deploy → registry setup → staff accounts →
+# Core, Gateway, Rule Engine. Each step that must finish first is a one-shot service the next one depends on.
+# Slots marked OWNER are filled by that owner's compose block (Dockerfile, healthcheck, .env keys); Seungmin merges them.
+# No mock profile here: the Gateway is Harits's ledger-gateway (same service name) and Core reads the pinned nodes.
+services:
+  # OWNER Harits (ledger/): validator nodes, the pinned observer / commission nodes (D-03), contract deploy job
+  # (writes CONTRACT_ADDRESS or uses a deterministic address) and registry setup job (all three org signers,
+  # operatorOrg, ruleEngineSigner, gatewayAccount; PINNED_NODE_URL stays a comma-separated list, contracts v1.1).
+  #
+  # registry-setup:
+  #   ...
+  #   depends_on: { contract-deploy: { condition: service_completed_successfully } }
+
+  # Staff accounts (Seungmin): no account API (threat-model O1); an account that exists is left unchanged.
+  # T01 logs in with this account (tests/scenarios/T01/README.md: T01_USERNAME / T01_PASSWORD).
+  # It builds the same image as core (a second build step, cached).
+  staff-setup:
+    build:
+      context: .
+      dockerfile: core/Dockerfile
+    command: ["python", "-m", "app.scripts.create_staff", "--username", "${STAFF_ADMIN_USERNAME:-admin1}",
+              "--org", "org_commission", "--role", "admin"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://pv2_core:${DB_CORE_PASSWORD}@db:5432/${POSTGRES_DB:-purevoting}
+      STAFF_PASSWORD: ${STAFF_ADMIN_PASSWORD:?set STAFF_ADMIN_PASSWORD in .env (at least 8 characters)}
+    depends_on:
+      db:
+        condition: service_healthy
+      # registry-setup: { condition: service_completed_successfully }   # once Harits's block is merged
+    restart: "no"
+
+  core:
+    environment:
+      CREATION_CHECK_MODE: node            # T01 needs the direct node read (core-web.md: the stub is removed for T01)
+    depends_on:
+      staff-setup:
+        condition: service_completed_successfully
+
+  # OWNER Harits: ledger-gateway (replaces the mock of docker-compose.yml under the same name; port ${GATEWAY_PORT},
+  # healthcheck, CORE_KEY / RULE_KEY / AGENT_KEY / GATEWAY_KEY / AUDITOR_KEY, GATEWAY_ACCOUNT_KEY, CHAIN_ID,
+  # CONTRACT_ADDRESS, CONFIRMATION_DEPTH, ANCHOR_BATCH_*), depends on registry-setup.
+  #
+  # ledger-gateway:
+  #   profiles: !reset []
+  #   build: { context: ., dockerfile: ledger/gateway/Dockerfile }
+  #   ...
+
+  # OWNER Anik (rules/): rule-engine service run by org_observer (D-25 v1.1). The current rules/Dockerfile runs the
+  # offline simulation only; the service block needs a healthcheck, RULE_KEY, RULE_ENGINE_SIGNER_KEY, CORE_URL,
+  # GATEWAY_URL, PINNED_NODE_URL and CONFIRMATION_DEPTH, and depends on core and ledger-gateway being healthy.
+  #
+  # rule-engine:
+  #   build: { context: rules }
+  #   ...

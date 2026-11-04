@@ -6,7 +6,7 @@ Implements `contracts/core-api.openapi.yaml`. Role design: `docs/roles/core-web.
 |---|---|
 | `app/main.py` | FastAPI app, routers, background loops (scheduler, outbox worker) |
 | `app/routes_public.py` | voter endpoints (public election, redeem, ballots, receipts) and staff login |
-| `app/routes_staff.py` | staff endpoints: elections, roster, freeze, link CSV, staff views, alerts |
+| `app/routes_staff.py` | staff endpoints: elections, roster, freeze, link CSV, staff views, alerts, findings |
 | `app/routes_internal.py` | `/internal/v1/*`: elections, checkpoints, views, findings, audit alerts |
 | `app/elections.py` | election creation (key pair, `config_hash`, registry), roster, freeze (D-10), token issue |
 | `app/voting.py` | redeem (one transaction across both schemas) and ballots (idempotent) |

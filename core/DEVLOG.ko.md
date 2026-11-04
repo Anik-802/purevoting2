@@ -410,3 +410,34 @@ esourcesin`)가 PATH에 없어서, `docker-credential-desktop`을 찾지 못하
 
 - T01 전체 흐름: 진짜 Gateway(아직 없음)·규칙 엔진 compose 블록, T01 정답 라벨 대기
 - PureChain 위에서의 생성 검사(이번 대조는 ganache)
+
+---
+
+## 2026-11-04 — 3주차 3부: T01 실행 스크립트와 통합 compose 틀
+
+| 항목 | 내용 |
+|---|---|
+| finding 조회 | staff `GET /v1/elections/{id}/findings` (계약 listFindings). 최신순, `rule_id`·`result` 필터(enum 아니면 400), 없는 선거 404 |
+| T01 스크립트 | `tests/scenarios/T01/setup.py` + README. Core HTTP API만으로 생성 → 확정 → 링크 → 개시 → 투표 → ANCHORED → R1–R5 판정, 실행 기록 |
+| 통합 compose | `docker-compose.integration.yml`: `staff-setup` 1회성 단계(Core가 그 뒤에 뜸), `CREATION_CHECK_MODE=node`, Harits·Anik 블록은 주석 칸 |
+| 테스트 | Core 74개 통과, 판정 함수 단위 확인, mock에서 finding을 심어 PASS(0)·FAIL(1)·partial(2) 끝까지 확인 |
+
+### 판정 방식 (감독관 검토 반영)
+
+- 판정 체크포인트 C = 마지막 표 직후 Core의 `open_checkpoint`(그 표를 커밋하는 체크포인트, 사이에 커밋이 끼면 하나 뒤).
+- 규칙별 C에서의 결과는 contracts/README.md supersession대로: C의 FAIL은 그대로, 아니면 C의 PASS, C의 INCONCLUSIVE는 나중 PASS가 대체해야 결정.
+- 다른 체크포인트의 FAIL도 차이로 봄(FAIL은 대체되지 않음). 실행 기록에 모든 finding을 남김.
+- `--config` 프리셋: evaluation(100명, 2시간, 900초), demo(100명, 10분, 60초, 기본), quick(20명, 60초, 30초). 값을 바꾸면 `custom`.
+- summary에 "not implemented"가 있으면 "T01 (partial Rx)"(종료 코드 2, 통과 아님).
+- Windows cp949 콘솔에서 죽지 않게 출력 ASCII + `backslashreplace`.
+
+### 감독관 검토
+
+1차 CHANGES NEEDED(P1: 규칙별 다른 체크포인트로 판정해 FAIL이 가려질 수 있음, `--config`가 이름표뿐) → 재검토 APPROVED.
+남은 권고(P3): 다섯 규칙이 정해지면 폴링이 끝나 그 뒤 더 높은 체크포인트의 finding은 기록에 없음(README에 적음),
+INCONCLUSIVE를 기대하는 T09/T11에 재사용하려면 분기 추가, partial 표기는 Anik과 합의해 rules-ai.md에 고정.
+
+### 아직 안 한 것
+
+- 실제 T01: Harits의 Gateway·노드·레지스트리 compose 블록, Anik의 Rule Engine 서비스(지금 `rules/Dockerfile`은 오프라인 시뮬레이션만), T01 정답 라벨 `expected.json` 대기
+- 3주차 공식 T01 프리셋(demo/evaluation)은 팀장 결정

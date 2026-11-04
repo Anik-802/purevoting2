@@ -11,3 +11,6 @@ node_modules/
 ledger/data/
 ledger/**/chaindata/
 .pytest_cache/
+
+# T01 run records (tests/scenarios/T01/setup.py --out)
+t01-runs/

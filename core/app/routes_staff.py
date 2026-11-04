@@ -1,9 +1,9 @@
-"""Staff endpoints (JWT): elections, roster, links, staff views and alerts."""
+"""Staff endpoints (JWT): elections, roster, links, staff views, alerts and findings."""
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import text
 
-from app import elections, timeutil
+from app import elections, findings, schemas, timeutil
 from app.auth import Staff, require_staff
 from app.errors import Problem
 from app.models import ElectionCreate, IssueIn, RosterIn
@@ -113,3 +113,25 @@ def staff_view(election_id: str, view: str, checkpoint: int | None = None, limit
 @router.get("/v1/elections/{election_id}/audit-alerts", tags=["audit"])
 def staff_alerts(election_id: str, staff: Staff = Depends(ANY_STAFF)):
     return alerts_of(election_id)
+
+
+@router.get("/v1/elections/{election_id}/findings", tags=["audit"])
+def staff_findings(election_id: str, rule_id: str | None = None, result: str | None = None,
+                   staff: Staff = Depends(ANY_STAFF)):
+    """Findings, newest first."""
+    for value, enum in ((rule_id, "RuleId"), (result, "RuleResult")):
+        if value is not None and value not in schemas.enum("common.schema.json", enum):
+            raise Problem(400, "VALIDATION_ERROR", enum)
+
+    def go(conn):
+        load_election(conn, election_id)
+        sql, params = "SELECT * FROM credential.findings WHERE election_id = :e", {"e": election_id}
+        if rule_id:
+            sql += " AND body->>'rule_id' = :ru"
+            params["ru"] = rule_id
+        if result:
+            sql += " AND body->>'result' = :re"
+            params["re"] = result
+        rows = conn.execute(text(sql + " ORDER BY stored_at DESC, finding_id DESC"), params)
+        return {"items": [findings.to_stored(r) for r in rows]}
+    return run(go)

@@ -235,6 +235,14 @@ def test_week2_path(env):
     assert c.post("/internal/v1/findings", json=changed, headers=rk).status_code == 409
     stored = c.get(f"/internal/v1/findings/{finding['finding_id']}", headers=rk).json()
     assert stored["review"]["status"] == "NOT_REQUIRED" and stored["recorded_event_id"].startswith("evt_")
+    listed = c.get(f"/v1/elections/{eid}/findings", headers=auth).json()["items"]
+    assert listed == [stored]
+    assert c.get(f"/v1/elections/{eid}/findings?rule_id=R1&result=PASS", headers=auth).json()["items"] == [stored]
+    assert c.get(f"/v1/elections/{eid}/findings?result=FAIL", headers=auth).json()["items"] == []
+    assert c.get(f"/v1/elections/{eid}/findings").status_code == 401
+    assert c.get(f"/v1/elections/{eid}/findings?rule_id=R9", headers=auth).status_code == 400
+    assert c.get(f"/v1/elections/{eid}/findings?result=pass", headers=auth).status_code == 400
+    assert c.get("/v1/elections/elc_unknown/findings", headers=auth).status_code == 404
 
 
 def test_ledger_rejection_of_election_created_allows_delete(env):
