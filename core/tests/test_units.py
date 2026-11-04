@@ -139,3 +139,35 @@ def test_malformed_node_answers_are_unavailable():
     with pytest.raises(_Bad):                      # timeBucketSeconds beyond uint32
         decode_state([0, 1, 2, 2**32, 0, 0, 0, 0, 0, 0, 0])
     assert decode_governance([0xa0, 2, 0, 24, 60, 1, 7])["org_ids"] == [format(7, "064x")]
+
+
+def test_gateway_events_reads_every_page():
+    import httpx
+
+    from app.gateway import GatewayClient, GatewayUnavailable
+
+    class Pages:
+        def __init__(self, pages):
+            self.pages, self.cursors = pages, []
+
+        def get(self, path, params=None, headers=None):
+            self.cursors.append(params.get("cursor"))
+            return httpx.Response(200, json=self.pages[len(self.cursors) - 1])
+
+    http = Pages([{"items": [{"event_id": "a"}], "next_cursor": "c1"}, {"items": [{"event_id": "b"}], "next_cursor": None}])
+    assert [e["event_id"] for e in GatewayClient(http=http).events("elc_1")] == ["a", "b"]
+    assert http.cursors == [None, "c1"]
+    for bad in ({"items": "ab", "next_cursor": None}, {"next_cursor": None}, ["x"]):
+        with pytest.raises(GatewayUnavailable):
+            GatewayClient(http=Pages([bad])).events("elc_1")
+    with pytest.raises(GatewayUnavailable):                     # a listing that never ends
+        GatewayClient(http=Pages([{"items": [], "next_cursor": "same"}] * 3)).events("elc_1")
+    class Raw:                                                  # deeply nested JSON: RecursionError while parsing
+        def get(self, path, params=None, headers=None):
+            return httpx.Response(200, content=b'{"items": [' + b"[" * 100000 + b"]" * 100000 + b'], "next_cursor": null}')
+    with pytest.raises(GatewayUnavailable):
+        GatewayClient(http=Raw()).events("elc_1")
+    endless = Pages([{"items": [], "next_cursor": str(i)} for i in range(2000)])
+    with pytest.raises(GatewayUnavailable):
+        GatewayClient(http=endless).events("elc_1")
+    assert len(endless.cursors) == 1000

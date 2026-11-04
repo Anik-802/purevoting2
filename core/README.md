@@ -12,12 +12,13 @@ Implements `contracts/core-api.openapi.yaml`. Role design: `docs/roles/core-web.
 | `app/voting.py` | redeem (one transaction across both schemas) and ballots (idempotent) |
 | `app/lifecycle.py` | checkpoints (six snapshot tables) and boundary transitions: open, PERIODIC, close + CLOSE_FINAL |
 | `app/ledger.py`, `app/outbox.py` | ledger events into the outbox; delivery per time bucket, outcome handling |
+| `app/ledger_compare.py` | every 30 s: each Core event the Gateway lists must equal the outbox event (all fields but `received_at` / `anchor`), and every accepted outbox event must be listed (I12); else OUTBOX_MISMATCH and FIFO stop |
 | `app/views.py` | the seven views "as of checkpoint k" |
 | `app/findings.py`, `app/schemas.py` | finding storage (single acceptance condition), JSON Schema checks against `contracts/` |
 | `app/chain.py`, `app/creation_check.py` | pinned-node JSON-RPC reader (URLs tried in order); creation check with confirmation depth D, Gateway `/v1/chain` comparison; `stub` mode for dev only |
 | `app/hashing.py` | `contracts/hashing.md` (H, Hc, Merkle, roots, signature digests) |
 | `app/scripts/create_staff.py` | staff-account setup script (no account API) |
-| `devtools/fake_gateway.py` | stateful stand-in Gateway for tests and local runs, plus `/rpc`, a stand-in for the pinned node |
+| `devtools/fake_gateway.py` | stateful stand-in Gateway for tests and local runs (`GET /v1/events` included), plus `/rpc`, a stand-in for the pinned node |
 | `devtools/demo_flow.py` | real-time demo of one election, creation to close (about 3 minutes, Korean output) |
 | `db/init/` | first-start DB setup: roles, schemas `credential` / `ballot`, tables, SECURITY DEFINER ballot functions |
 | `tests/` | unit tests (39 hash vectors, …) and `test_flow_db.py` (week 2 path on a real DB) |
@@ -42,4 +43,4 @@ docker compose exec core python -m devtools.demo_flow
 The DB init scripts run only when the `pgdata` volume is empty; after changing them use `docker compose down -v`.
 
 Not done yet (later weeks): T01 against the real Gateway and Rule Engine (waiting for their services), admin actions,
-tally, finalize, review relay, comparing ledger events with the outbox, AI reports, service logs, the web apps.
+tally, finalize, review relay, AI reports, service logs, the web apps.

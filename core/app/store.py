@@ -33,10 +33,14 @@ def set_status(conn, e: dict, status: str, checkpoint: int) -> None:
 
 
 def raise_alert(conn, election_id: str, checkpoint: int, kind: str, source: str, at: int,
-                detail: str | None = None) -> None:
-    """Idempotent by (election_id, checkpoint, kind, source). `detail` must already be scrubbed (no hashes, no evr_ IDs)."""
+                detail: str | None = None, append: bool = False) -> None:
+    """Idempotent by (election_id, checkpoint, kind, source). `detail` must already be scrubbed (no hashes, no evr_ IDs).
+    append: an existing alert with the same key keeps its time and gets this detail added (up to 500 characters)."""
+    on_conflict = ("DO UPDATE SET detail = left(audit_alerts.detail || '; ' || EXCLUDED.detail, 500)" if append
+                   else "DO NOTHING")
     conn.execute(text("INSERT INTO credential.audit_alerts (election_id, checkpoint, kind, source, raised_at, detail) "
-                      "VALUES (:e, :k, :kind, :src, :at, :d) ON CONFLICT DO NOTHING"),
+                      f"VALUES (:e, :k, :kind, :src, :at, :d) ON CONFLICT (election_id, checkpoint, kind, source) "
+                      f"{on_conflict}"),
                  {"e": election_id, "k": checkpoint, "kind": kind, "src": source, "at": to_dt(at), "d": detail})
 
 

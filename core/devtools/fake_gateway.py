@@ -97,6 +97,18 @@ async def submit(request: Request):
     return {"results": results}
 
 
+@app.get("/v1/events")
+def list_events(election_id: str, limit: int = 100, cursor: str | None = None):
+    """Stored events (REJECTED ones are rejection records, not events), by occurred_at then event_id; the cursor is an
+    offset. Tests inject or alter entries of state.events to play a dishonest Gateway."""
+    items = sorted((ev for ev in state.events.values() if ev.get("election_id") == election_id and "anchor" in ev),
+                   key=lambda ev: (str(ev.get("occurred_at")), str(ev.get("event_id"))))
+    start = int(cursor or 0)
+    page = items[start:start + limit]
+    return {"items": page, "next_cursor": str(start + limit) if start + limit < len(items) else None,
+            "last_core_seq": state.last_seq.get(election_id, 0)}
+
+
 @app.get("/v1/events/{event_id}")
 def get_event(event_id: str):
     ev = state.events.get(event_id)

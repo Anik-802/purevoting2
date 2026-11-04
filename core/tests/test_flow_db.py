@@ -21,7 +21,7 @@ URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL not set")
 
 if URL:
-    from app import creation_check, db, hashing, outbox
+    from app import creation_check, db, hashing, ledger_compare, outbox
     from app.auth import hash_password
     from app.chain import NodeReader, set_reader
     from app.config import settings
@@ -484,3 +484,199 @@ def test_gateway_chain_config_differs(node):
     eid = _created(c, auth, t0, "Config")
     assert _check(c, auth, eid) == ("PASSED", ["CHAIN_CONFIG_MISMATCH"])   # alert only; the pinned values are used
     assert _detail(c, auth, eid) == "Gateway /v1/chain differs: confirmation_depth, rpc_urls"
+
+
+# ---- outbox comparison: ledger events vs the outbox (threat model I12) ----
+
+def _fifo_stopped(eid, value=None):
+    with db.get_engine().begin() as conn:
+        if value is not None:      # the operators resumed the FIFO
+            conn.execute(text("UPDATE credential.elections SET fifo_stopped = :v WHERE election_id = :e"),
+                         {"v": value, "e": eid})
+        return conn.execute(text("SELECT fifo_stopped FROM credential.elections WHERE election_id = :e"),
+                            {"e": eid}).scalar_one()
+
+
+def _alerts(c, auth, eid):
+    items = c.get(f"/v1/elections/{eid}/audit-alerts", headers=auth).json()["items"]
+    return {a["kind"]: a.get("detail") for a in items}
+
+
+def _frozen(c, auth, t0, title):
+    """ELECTION_CREATED, ROSTER_FROZEN and checkpoint 0 accepted by the fake Gateway."""
+    now = clock.frozen                  # a second election in the same test starts where the clock is
+    eid = _create(c, auth, t0, title=title).json()["election_id"]
+    clock.frozen = now + B
+    deliver_until_idle(eid)
+    c.put(f"/v1/elections/{eid}/roster", headers=auth,
+          json={"voters": [{"external_ref": f"v{i}", "name": "n"} for i in range(100)]})
+    assert c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth).status_code == 202
+    clock.frozen = now + 2 * B
+    deliver_until_idle(eid)
+    assert [r["status"] for r in outbox_rows(eid)] == ["ACCEPTED"] * 3
+    for memo in (ledger_compare._equal, ledger_compare._reported, ledger_compare._absent, ledger_compare._unreadable):
+        memo.pop(eid, None)
+    return eid, {r["event"]["type"]: r["event_id"] for r in outbox_rows(eid)}
+
+
+def _stored(eid, event_id, type_, payload, **extra):
+    """An event the (dishonest) Gateway lists for this election."""
+    ev = {"event_id": event_id, "schema_version": "1", "election_id": eid, "type": type_, "source": "core",
+          "checkpoint": 0, "occurred_at": "2026-01-01T00:00:00Z", "time_precision": "exact",
+          "actor": {"kind": "system"}, "payload": payload, "anchor": {"status": "PENDING"}}
+    if isinstance(payload, dict):
+        ev["payload_hash"] = hashing.Hc(payload)
+    ev |= extra
+    fake_gateway.state.events[str(event_id)] = ev
+    return ev
+
+
+def test_outbox_comparison_honest_gateway(env):
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    eid, _ = _frozen(c, auth, t0, "Honest")
+    assert ledger_compare.compare(eid) == [] and ledger_compare.compare(eid) == []   # two passes: nothing absent
+    assert len(ledger_compare._equal[eid]) == 3                  # not compared with the outbox again
+    with db.get_engine().begin() as conn:                         # the ACCEPTED answer was lost: still PENDING here
+        conn.execute(text("UPDATE credential.outbox SET status = 'PENDING' WHERE election_id = :e "
+                          "AND event->>'type' = 'ROSTER_FROZEN'"), {"e": eid})
+    ledger_compare._equal.pop(eid)
+    _stored(eid, ulid("evt"), "APPROVAL_RECORDED", {"x": 1}, source="gateway")   # a Gateway event type
+    assert ledger_compare.compare(eid) == []
+    assert not _fifo_stopped(eid) and _alerts(c, auth, eid) == {}
+
+
+def test_outbox_comparison_detects_injected_and_altered_events(env):
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    eid, ids = _frozen(c, auth, t0, "Injected")
+    assert ledger_compare.compare(eid) == []                     # all three found equal and memoised
+    st = fake_gateway.state.events
+    created = st[ids["ELECTION_CREATED"]]                        # altered, with a matching payload_hash
+    p = dict(created["payload"], approval_threshold=1)
+    st[ids["ELECTION_CREATED"]] = dict(created, payload=p, payload_hash=hashing.Hc(p))
+    frozen = st[ids["ROSTER_FROZEN"]]                            # payload altered, stale payload_hash
+    st[ids["ROSTER_FROZEN"]] = dict(frozen, payload=dict(frozen["payload"], voter_count=4))
+    cp = st[ids["CHECKPOINT_COMMITTED"]]                         # only the checkpoint field moved
+    st[ids["CHECKPOINT_COMMITTED"]] = dict(cp, checkpoint=7)
+    injected, tally = ulid("evt"), ulid("evt")
+    _stored(eid, injected, "ELECTION_OPENED", {"opened": True})
+    _stored(eid, tally, "TALLY_PUBLISHED", {"t": 1}, source="gateway")   # a Core type marked as the Gateway's
+    _stored(eid, "evr_" + "7" * 26, "BALLOT_RECEIVED", {"ballot_hash": "0" * 64})
+    _stored(eid, ["not", "an", "id"], "<b>X</b>", "not an object")
+    problems = ledger_compare.compare(eid)
+    assert sorted(problems) == sorted([
+        f"ELECTION_CREATED {ids['ELECTION_CREATED']}: differs: payload, payload_hash",
+        f"ROSTER_FROZEN {ids['ROSTER_FROZEN']}: differs: payload",
+        f"CHECKPOINT_COMMITTED {ids['CHECKPOINT_COMMITTED']}: differs: checkpoint",
+        f"ELECTION_OPENED {injected}: not in the outbox", f"TALLY_PUBLISHED {tally}: not in the outbox",
+        "BALLOT_RECEIVED: not in the outbox", "unknown type: malformed event_id"])
+    alerts = _alerts(c, auth, eid)
+    assert set(alerts) == {"OUTBOX_MISMATCH", "FIFO_STOPPED"} and _fifo_stopped(eid)
+    assert "evr_" not in alerts["OUTBOX_MISMATCH"] and "0" * 64 not in alerts["OUTBOX_MISMATCH"]
+    # the operators resume: known problems do not stop the FIFO again; a new one does and is added to the alert
+    _fifo_stopped(eid, False)
+    assert ledger_compare.compare(eid) and not _fifo_stopped(eid)
+    later = ulid("evt")
+    _stored(eid, later, "ELECTION_CLOSED", {"c": 1})
+    ledger_compare.compare(eid)
+    assert _fifo_stopped(eid)
+    assert f"ELECTION_CLOSED {later}: not in the outbox" in _alerts(c, auth, eid)["OUTBOX_MISMATCH"]
+    # with the FIFO stopped, a later event is not delivered
+    before = len(fake_gateway.state.received)
+    clock.frozen += 600
+    scheduler_tick([eid])
+    deliver_until_idle(eid)
+    assert len(fake_gateway.state.received) == before
+
+
+def test_outbox_comparison_hostile_values(env):
+    """Values meant to break the comparison (NUL in an ID, checkpoint 2**64, deep nesting) are reported, never an
+    exception that rolls back or skips the pass."""
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    eid, _ = _frozen(c, auth, t0, "Hostile")
+    honest = GatewayClient(http=TestClient(fake_gateway.app))
+    deep = []
+    for _ in range(5000):
+        deep = [deep]
+    big, nested = ulid("evt"), ulid("evt")
+
+    class Hostile:
+        def events(self, election_id):
+            return honest.events(election_id) + [
+                {"event_id": "evt_" + "A" * 25 + "\x00", "type": "ELECTION_OPENED", "source": "core"},
+                {"event_id": big, "type": "ELECTION_OPENED", "source": "core", "checkpoint": 2**64},
+                {"event_id": nested, "type": "ELECTION_OPENED", "source": "core", "payload": deep},
+                "not an object"]
+    set_gateway(Hostile())
+    problems = ledger_compare.compare(eid)
+    set_gateway(honest)
+    assert problems[0] == "ELECTION_OPENED: malformed event_id" and problems[3] == "unknown type: not an object"
+    assert problems[1] in (f"ELECTION_OPENED {big}: not in the outbox", f"ELECTION_OPENED {big}: unreadable")
+    assert problems[2] == f"ELECTION_OPENED {nested}: unreadable" and len(problems) == 4
+    assert _fifo_stopped(eid) and "\x00" not in _alerts(c, auth, eid)["OUTBOX_MISMATCH"]
+
+
+def test_outbox_comparison_absent_rejected_and_unreadable(env):
+    """An accepted event missing from the listing in two passes in a row is reported; an event answered REJECTED but
+    listed is reported; an unreadable listing alerts after 90 s without stopping the FIFO."""
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    eid, ids = _frozen(c, auth, t0, "Absent")
+    del fake_gateway.state.events[ids["ROSTER_FROZEN"]]          # the Gateway drops an accepted event
+    assert ledger_compare.compare(eid) == []                     # first pass: may be a lagging listing
+    assert ledger_compare.compare(eid) == [f"ROSTER_FROZEN {ids['ROSTER_FROZEN']}: accepted but not listed"]
+    assert _fifo_stopped(eid)
+
+    eid, ids = _frozen(c, auth, t0, "Unreadable")
+    honest = GatewayClient(http=TestClient(fake_gateway.app))
+
+    class Down:
+        def get(self, *a, **k):
+            raise httpx.ConnectError("refused")
+    set_gateway(GatewayClient(http=Down()))
+    assert ledger_compare.compare(eid) == [] and _alerts(c, auth, eid) == {}
+    clock.frozen += 90
+    assert ledger_compare.compare(eid) == []
+    set_gateway(honest)
+    assert set(_alerts(c, auth, eid)) == {"LEDGER_UNAVAILABLE"} and not _fifo_stopped(eid)
+    with db.get_engine().begin() as conn:     # the Gateway answered REJECTED but lists the event as stored
+        conn.execute(text("UPDATE credential.outbox SET status = 'REJECTED' WHERE election_id = :e "
+                          "AND event->>'type' = 'ROSTER_FROZEN'"), {"e": eid})
+    assert ledger_compare.compare(eid) == [f"ROSTER_FROZEN {ids['ROSTER_FROZEN']}: stored although answered REJECTED"]
+    assert _fifo_stopped(eid)
+
+
+def test_outbox_comparison_delivery_between_the_two_reads(env):
+    """Events written and delivered after the outbox was read but before the listing are not a mismatch."""
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    eid = _create(c, auth, t0, title="Race").json()["election_id"]
+    clock.frozen = t0 + B
+    deliver_until_idle(eid)
+    c.put(f"/v1/elections/{eid}/roster", headers=auth,
+          json={"voters": [{"external_ref": f"v{i}", "name": "n"} for i in range(100)]})
+    honest = GatewayClient(http=TestClient(fake_gateway.app))
+
+    class Racing:
+        def events(self, election_id):
+            # the outbox worker runs between the comparison's two reads: freeze → ROSTER_FROZEN + checkpoint 0
+            assert c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth).status_code == 202
+            clock.frozen = t0 + 2 * B
+            set_gateway(honest)
+            deliver_until_idle(eid)
+            return honest.events(election_id)
+    set_gateway(Racing())
+    try:
+        assert ledger_compare.compare(eid) == []
+    finally:
+        set_gateway(honest)
+    assert len(fake_gateway.state.events) >= 3 and not _fifo_stopped(eid) and _alerts(c, auth, eid) == {}
+
+
+def test_outbox_comparison_second_voter_injection_after_resume(env):
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    eid, _ = _frozen(c, auth, t0, "Voter")
+    _stored(eid, "evr_" + "7" * 26, "BALLOT_RECEIVED", {"ballot_hash": "1" * 64})
+    assert ledger_compare.compare(eid) == ["BALLOT_RECEIVED: not in the outbox"] and _fifo_stopped(eid)
+    _fifo_stopped(eid, False)                                    # resumed by the operators
+    assert ledger_compare.compare(eid) and not _fifo_stopped(eid)
+    _stored(eid, "evr_" + "8" * 26, "BALLOT_RECEIVED", {"ballot_hash": "2" * 64})   # same wording, another event
+    ledger_compare.compare(eid)
+    assert _fifo_stopped(eid)

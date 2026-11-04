@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app import creation_check, db, outbox, timeutil
+from app import creation_check, db, ledger_compare, outbox, timeutil
 from app.config import settings
 from app.errors import Problem, problem_handler, validation_handler
 from app.lifecycle import advance
@@ -53,8 +53,9 @@ async def lifespan(_: FastAPI):
     stop = threading.Event()
     creation_check.warn_if_stub()
     if settings.run_workers and settings.database_url:
-        for fn in (scheduler_tick, outbox.deliver_all):
-            threading.Thread(target=_loop, args=(stop, fn, 1.0), daemon=True).start()
+        for fn, period in ((scheduler_tick, 1.0), (outbox.deliver_all, 1.0),
+                           (ledger_compare.compare_all, ledger_compare.PERIOD)):
+            threading.Thread(target=_loop, args=(stop, fn, period), daemon=True).start()
     yield
     stop.set()
 

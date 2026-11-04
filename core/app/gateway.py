@@ -8,6 +8,7 @@ from app.config import settings
 from app.errors import Problem
 
 TIMEOUT = 5.0   # README "Timeouts / retries": 5 s per inter-service call
+MAX_EVENT_PAGES = 1000   # GET /v1/events: 1000 pages of 1000 events; a Gateway that never ends the listing is unavailable
 
 
 class GatewayUnavailable(Exception):
@@ -82,6 +83,30 @@ class GatewayClient:
             cursor = page.get("next_cursor")
             if not cursor:
                 return None
+
+    def events(self, election_id: str) -> list[dict]:
+        """GET /v1/events: every stored event of the election (all pages, at most MAX_EVENT_PAGES)."""
+        items, cursor, cursors = [], None, set()
+        while True:
+            if len(cursors) >= MAX_EVENT_PAGES or cursor in cursors:
+                raise GatewayUnavailable("GET /v1/events: too many pages or a repeated cursor")
+            cursors.add(cursor)
+            params = {"election_id": election_id, "limit": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            r = self._get("/v1/events", **params)
+            if r.status_code != 200:
+                raise GatewayUnavailable(f"GET /v1/events: HTTP {r.status_code}")
+            try:
+                page = r.json()
+                if not isinstance(page["items"], list):
+                    raise TypeError
+                items += page["items"]
+                cursor = page.get("next_cursor")
+            except Exception:   # noqa: BLE001 — anything unparsable (incl. RecursionError on deep JSON) is unavailable
+                raise GatewayUnavailable("GET /v1/events: malformed page") from None
+            if not cursor:
+                return items
 
     def event(self, event_id: str, timeout: float = TIMEOUT) -> dict | None:
         try:
