@@ -15,13 +15,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r tools/requirements.txt solc-select==1.0.4
+      - run: pip install -r tools/requirements.txt
       - name: Hash vectors (pv_hash.py)
         run: python -m unittest discover -s ledger/gateway/tests -v
       - name: Signer module (pure checks)
         run: python -I ledger/tests/test_ethsign.py
-      - name: solc 0.8.28 (ledger/README.md compiler settings)
-        run: solc-select install 0.8.28 && solc-select use 0.8.28 && solc --version
+      - name: solc 0.8.28 (ledger/README.md compiler settings; sha256 from binaries.soliditylang.org/linux-amd64/list.json)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL -o "$RUNNER_TEMP/bin/solc" https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.28+commit.7893614a
+          echo "9a0fb7e0db2c0641dbae1c5cc645dc686820c83af516226abb1c0a2f76636f25  $RUNNER_TEMP/bin/solc" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/solc"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: solc --version
       - name: Compile (optimizer on, EVM shanghai)
         run: solc --evm-version shanghai --optimize --optimize-runs 200 --bin -o "$RUNNER_TEMP/out" ledger/contracts/PureVotingLedger.sol
       - name: Selectors and events match contracts/chain-interface.md
