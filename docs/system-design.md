@@ -74,7 +74,7 @@
 | Mail | MailHog (fake mailbox) in development, CSV export in the demo | D-16 | free |
 | Repository / CI | GitHub monorepo + GitHub Actions | D-18 | free |
 | Mock servers | prism (from the OpenAPI files) | section 7 #4 | free |
-| AI model | Chosen by Anik (recommended: Claude API); the AI agent is optional | D-15 | owner's choice (API usage may cost money) |
+| AI model | Free open-weight model run locally, chosen by Anik; no paid API; fallback a template report without AI; the agent is optional | D-15 (v1.2) | zero cost only |
 
 Harits and Anik only have to keep the chain interface in `chain-interface.md` and the Gateway API; the platform and the
 model are theirs to choose.
@@ -289,7 +289,7 @@ The platform (D-02) and the AI model (D-15) are chosen by their owners. All othe
 | Optional | AI Audit Agent (read-only tools, evidence-citing reports), manual re-run requests |
 | Reference files | `contracts/README.md` "Audit rules", `finding.schema.json`, `audit-report.schema.json`, `chain-interface.md` "How R5 uses it", `hashing.md` |
 | Counterpart during development | Core mock, Gateway mock, `contracts/examples/` |
-| Decides | AI model and how it is called (D-15) |
+| Decides | Which free local model and prompt (D-15 v1.2: zero cost; fallback template report) |
 | Note | Ground-truth labels for fault tests are written first by Harits (not Anik), for a fair experiment |
 
 ---
@@ -308,8 +308,8 @@ The 8-week plan was replaced on 2026-11-04 by **`docs/schedule.md`** (D-28): dem
 | F | 12-04 | Final report, presentation and demo |
 
 **Mandatory:** normal vote, roster amendment, voiding, rules R1–R5, tests T01, T02, T04, T05, T08, T15.
-**Not built (D-28):** window change, early close, link reissue, direct chain submissions, the remaining tests; the AI
-Audit Agent only as decided in D-28.
+**Not built (D-28):** window change, early close, link reissue, direct chain submissions, the remaining tests. AI Audit
+Agent: zero cost only (D-15 v1.2) — a local free model, else a template report, else future work.
 
 ---
 
@@ -365,8 +365,8 @@ purevoting2/
 - **Experiment baselines:**
   - B0: original PureVoting
   - B1: rules only
-  - B2: rules + AI
-  - Metrics: FAIL precision and recall, root-cause accuracy, evidence validity, AI cost
+  - B2: rules + AI (free local model, only if it passed the 11-20 check)
+  - Metrics: FAIL precision and recall, root-cause accuracy, evidence validity, AI tokens and time (cost 0)
 - **Demo flow (draft):**
   1. Normal vote
   2. Roster change without approval (T05) → R4 FAIL

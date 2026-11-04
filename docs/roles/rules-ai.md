@@ -16,7 +16,7 @@ You do **not** own: changing anything in the election, approving actions or revi
 or accessing the database (views only). Neither the Rule Engine nor the AI can delete ballots, stop an election or change
 results.
 
-**You decide:** the AI model and how it is called (D-15), and the AI API key and budget. Constraints from the contracts:
+**You decide:** which free local model and prompt (D-15 v1.2: zero cost — no paid API, no cloud tier; fallback a template report). Constraints from the contracts:
 10 s per tool call, at most 20 steps, then `ABORTED`; the agent never receives the election private key.
 
 ## 2. Read first
@@ -100,6 +100,18 @@ the observer org (`org_observer`, D-25 v1.1; the registry setup script's default
   - It polls `GET /internal/v1/findings?has_report=false` for FAIL / INCONCLUSIVE findings and investigates with the tools in `audit-report.schema.json#/$defs/AgentTool` only.
   - It submits an `AuditReportSubmission` without `human_review`. Every entry in `evidence_refs` and `counter_evidence_refs` must resolve, otherwise Core answers 422 EVIDENCE_NOT_FOUND.
   - Staff review the report. It is advisory: finalization never depends on it.
+  - **Zero API cost (D-15 v1.2):** a free open-weight model run locally (e.g. Ollama); no paid API, no cloud tier; nothing
+    leaves the machine. Go / no-go on 2026-11-20 (`docs/schedule.md`). Reports are written as files (Core report storage
+    is future work, D-28); evidence refs are checked by a read-only script.
+  - **Template report (no-go fallback, not AI):** must validate against `audit-report.schema.json`:
+    - `model = {"provider": "none", "name": "template", "prompt_version": "1.0.0"}` (x.y.z pattern);
+    - hypotheses from the B1 rule-ID → cause table, whose causes are values of `common.schema.json#/$defs/CauseCode`
+      only; `status` COMPLETED needs at least one hypothesis; a finding whose cause cannot be named (e.g. most
+      INCONCLUSIVE) gets `status` ESCALATED;
+    - each hypothesis has at least one `evidence_refs` entry (the finding itself and the finding's own evidence);
+    - every other required field filled; `limitations` says "generated without AI from the rule-to-cause table".
+    It is shown as an explanation aid (`provider none` = not AI) and gets no AI metrics.
+  - B2 runs record the model digest, quantization, temperature, seed and hardware.
 - **Manual re-run requests** (`audit-run-requests`).
 
 ## 6. Pitfalls
@@ -130,8 +142,8 @@ the observer org (`org_observer`, D-25 v1.1; the registry setup script's default
 
 **Experiment fairness.**
 - Ground-truth labels for each scenario (`tests/scenarios/<id>/expected.json`) are written and committed by Harits **before** the first run, and never edited after seeing results.
-- Baselines: B1 rules only, B2 rules + AI.
-- Metrics: FAIL precision / recall, root-cause accuracy, evidence validity, AI tokens / cost (`docs/test-plan.md`).
+- Baselines: B1 rules only, B2 rules + local AI agent (only if it passed the 11-20 check).
+- Metrics: FAIL precision / recall, root-cause accuracy, evidence validity, AI tokens and time to report; API cost is 0 (`docs/test-plan.md`).
 
 Self-test without Core / Gateway: prism mocks of both OpenAPI files plus the fixtures in `contracts/examples/`.
 
@@ -143,7 +155,7 @@ A partly implemented rule lists its unimplemented checks in `summary` with the w
 with such a finding is reported as "T01 (partial R4/R5)", not as a T01 pass.
 
 ## 9. First issues to open
-1. D-15 decision (AI model, key, budget) + PR to `docs/decisions.md`.
+1. D-15 (v1.2, zero cost): name the local model in `docs/decisions.md` after the 11-20 check.
 2. Hashing library + `tests/vectors/hash-vectors.json`.
 3. Finding builder (FindingSubmission, local schema validation, durable store, signing).
 4. Discovery + run scheduler (run condition, timeout, alerts).

@@ -10,7 +10,7 @@ and be **finished by Fri 2026-12-04**. This page replaces the week table of syst
 |---|---|---|
 | Seungmin (Core, web) | Elections, roster, links, redeem / ballot, outbox, checkpoints, views, internal endpoints, alert kinds per service, findings storage, creation check from the pinned node, outbox-vs-ledger comparison, staff setup, T01 run script, integration compose skeleton (74 tests, CI green) | Tally, finalize, admin actions (ROSTER_AMEND, ELECTION_VOID), review relay, `evidence_check` (always PENDING now), outbox resume, **voter web and admin web (not started)**, scripts for T02 / T04 / T05 / T08 / T15 |
 | Harits (contract, Gateway, nodes) | Hash module, private PureChain on own PC (test kit with 4 nodes, RPC 8541–8544), contract 16 / 32 functions with matching selectors, 123 on-chain checks, key generation and registry setup scripts (PRs #1, #2 merged) | **Gateway service (not started)**, finding records, relayed-event indexing, proposals and signature checks, reviews, finalize quorum, void, compose blocks for nodes / deploy / registry / Gateway, measurements (D-27), **T01 label (overdue)** |
-| Anik (Rule Engine, AI) | Hash and EIP-191 signing, R1–R3, R4 / R5 partly (unimplemented checks listed in `rules/README_SIMULATION.md`), finding store, simulation against fake Core / Gateway | **Rule Engine as a running service against the real Core and Gateway**, R4 / R5 complete, pinned-node reads, compose block, AI Audit Agent (optional) |
+| Anik (Rule Engine, AI at zero cost) | Hash and EIP-191 signing, R1–R3, R4 / R5 partly (unimplemented checks listed in `rules/README_SIMULATION.md`), finding store, simulation against fake Core / Gateway | **Rule Engine as a running service against the real Core and Gateway**, R4 / R5 complete, pinned-node reads, compose block, AI Audit Agent (optional) |
 
 ## 2. Milestones
 
@@ -60,9 +60,13 @@ new date (section 4).
 | **Mon 11-16** | R4 and R5 complete (pinned-node reads of anchors, registry and contract state; snapshots, row-to-ledger match via anchor leaves, sealed-hash check), re-runs, supersession, `previous_finding_id`, R1–R5 at the TALLY checkpoint |
 | Wed 11-18 | M2 rehearsal: E2 shows T05 → R4 / R5 FAIL, T08 (a)(b) → R5 FAIL |
 | Thu 11-19 | **M2 demo** |
+| Tue 11-17 | AI check starts only if R4 / R5 were done on 11-16 (otherwise AI is future work). Install a free open-weight model locally (e.g. Ollama) and pick it; test data: three FAIL / INCONCLUSIVE findings recorded from the T05 / T08 script runs of 11-13 – 11-16 and the M1 run |
+| Wed 11-18 – Thu 11-19 | M2 fixes come first; the AI check continues only in the time left. Measure: tool calls work, a report within 10 minutes on the available PC, the report validates against `audit-report.schema.json`, every evidence ref resolves (checked by a read-only script) |
+| **Fri 11-20** | **AI go / no-go** (posted to the team): go → local agent; no-go → template report (same tools and format, hypotheses from the B1 rule-ID → cause table, `model.provider = "none"`) |
+| **Tue 11-24** | Local agent or template report done: polls FAIL / INCONCLUSIVE findings through the read-only tools and writes each report as a file (Core report storage is future work, see section 5); evidence refs checked by the read-only script; **stop at once** if the 11-25 work below is at risk; then AI is future work |
 | **Wed 11-25** | R4 approval-signature checks for admin actions; T02, T04, T15 give the labelled results |
 | Thu 11-26 | M3 run |
-| Fri 11-27 – Mon 11-30 | Experiment runs and tables (section 5) with Seungmin |
+| Fri 11-27 – Mon 11-30 | Experiment runs and tables (section 5) with Seungmin; B2 runs only if the local agent passed 11-20 |
 
 ### Seungmin — Core, web, integration
 
@@ -97,6 +101,8 @@ new date (section 4).
 | M2 | R4 / R5 complete | Anik | 11-16 |
 | M3 | T02, T04, T15 labels | Harits | 11-20 |
 | M3 | Proposals + signature checks / reviews | Harits | 11-23 / 11-25 |
+| Optional | AI go / no-go (local model or template) | Anik | 11-20 |
+| Optional | Report generator (local agent or template), reports as files | Anik | 11-24 |
 
 **Fallbacks, decided now (D-28) and switched on by one line in `docs/decisions.md` when needed:**
 - A handoff one day late: the owner announces a new date the same day; the others re-order their own list.
@@ -111,8 +117,8 @@ new date (section 4).
 | Item | Before | Now |
 |---|---|---|
 | Optional features (WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE, direct chain submissions, T03, T06, T07, T09–T13, T16) | Weeks 6–7 "whatever fits" | Not built; future work in the report |
-| AI Audit Agent | Week 8 if time allows | **Team lead to decide now:** (a) future work, B2 not run (recommended), or (b) Anik builds it 11-17 – 11-24 with a hard limit of 3 days, dropped if R4 / R5 slip or Anik's 11-25 work is late |
-| Experiment (test-plan) | Every scenario × seeds 1–10 in the evaluation configuration; baselines B0 / B1 / B2 | The 6 mandatory scenarios × seeds 1–3 first, 4–5 if time allows, in the **demo configuration** (about 15–20 min per run, scripted), 11-27 – 11-30; baseline B1; B2 only with the AI agent; B0 described qualitatively. Labels still before the first run. The report states that the evaluation configuration was not run |
+| AI Audit Agent | Week 8 if time allows (recommended: paid Claude API) | **Zero API cost only (D-15 v1.2):** anything that costs money is dropped. A free open-weight model run locally, checked 11-17 – 11-19 (only if R4 / R5 were on time), go / no-go 11-20; no-go → template report without AI; neither ready by 11-24 or Anik's mandatory work at risk → future work. Reports are files; Core report storage (`POST /internal/v1/audit-reports`, EVIDENCE_NOT_FOUND) and the report screen are **future work**, so threat-model A2 and test T12 are not implemented and the report says so |
+| Experiment (test-plan) | Every scenario × seeds 1–10 in the evaluation configuration; baselines B0 / B1 / B2 | The 6 mandatory scenarios × seeds 1–3 first, 4–5 if time allows, in the **demo configuration** (about 15–20 min per run, scripted), 11-27 – 11-30; baseline B1; B2 (rules + local AI) only if the local agent passed 11-20, with its evidence validity measured offline by Anik's read-only script; the template report is not B2 and gets no AI metrics (its evidence is copied from the finding); B0 described qualitatively. API cost is 0 by construction; tokens, time to report, model digest, quantization, temperature, seed and hardware are recorded. Labels still before the first run. The report states that the evaluation configuration was not run |
 | Integration points | Weeks 3, 5, 7 | M1 11-11, M2 11-19, M3 11-26, M4 12-01 |
 | D-27 measurements | Due 11-09 | Due 11-13; D = 2 until then |
 | Unchanged | Mandatory scope (normal vote, roster amendment, voiding, R1–R5, T01, T02, T04, T05, T08, T15), contracts v1.1, on-chain signature checks (D-11), anonymity rules | — |

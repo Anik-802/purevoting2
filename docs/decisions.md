@@ -11,7 +11,8 @@
 > after two supervisor reviews of the answers to Harits's open questions. Values marked *provisional* wait for Harits's
 > measurement (due 2026-11-09). Contracts changed accordingly (v1.1, `contracts/CHANGELOG.md`).
 > 2026-11-04 v1.2: new D-28 (schedule compression: demo 2026-11-19, final 2026-12-04, `docs/schedule.md`), after
-> three supervisor reviews of the schedule (PASS). D-27's measurement deadline moves to 2026-11-13.
+> three supervisor reviews of the schedule (PASS). D-27's measurement deadline moves to 2026-11-13. D-15 set: no paid AI
+> (local free model, else a template report).
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -33,7 +34,7 @@
 | D-12 | Core ↔ ledger consistency | Outbox + seq; strict transitions applied at once and kept if rejected (alert); permissive ones applied after ACCEPTED, reverted if rejected | Seungmin, Harits | Confirmed |
 | D-13 | Rule Engine data access | Core read-only views (as of a checkpoint) + Gateway query API + direct node reads; no DB access | Anik, Seungmin | Confirmed |
 | D-14 | Rule / checkpoint cadence | Checkpoint interval = integer multiple of the bucket (default 1×) + on state changes; rules at every checkpoint + after closing + manual | Anik, Seungmin | Confirmed |
-| D-15 | AI model and calling | Recommended Claude API tool use, single agent | Anik | Delegated (Anik) |
+| D-15 | AI model and calling | **No paid AI (v1.2):** a free open-weight model run locally (e.g. via Ollama), single agent; if it does not work by 11-20, a non-AI template report instead; anything that costs money is dropped | Anik | Confirmed (v1.2) |
 | D-16 | Link delivery | Development: MailHog (fake mailbox); demo: CSV export | Seungmin | Confirmed |
 | D-17 | Authentication | Staff: ID/password + JWT (admin / approver / auditor + org); **a different key per service** and a permission matrix | Seungmin | Confirmed |
 | D-18 | Repository and runtime | GitHub monorepo + docker compose + GitHub Actions | Seungmin | Confirmed |
@@ -46,7 +47,7 @@
 | D-25 | Rule Engine operator | ruleKey held and operated by an org other than the commission and the Gateway operator (demo: observer, v1.1) | All | Confirmed (v1.1) |
 | D-26 | Gateway operator | Neutral org. It can delay relaying but cannot forge signed approvals, reviews or findings; signers can submit directly on chain | Harits | Confirmed |
 | D-27 | Confirmation depth | A chain item counts only in a block with ≥ D blocks on top (D = 2, *provisional*); pinned like the contract address | Harits, Seungmin, Anik | Confirmed (v1.1) |
-| D-28 | Schedule compression | Demo version 2026-11-19, final 2026-12-04; milestones M1–M4, per-owner dates, handoffs and fallbacks in `docs/schedule.md`; optional features not built; experiment reduced; mandatory scope unchanged | All | Confirmed (v1.2; AI agent option open) |
+| D-28 | Schedule compression | Demo version 2026-11-19, final 2026-12-04; milestones M1–M4, per-owner dates, handoffs and fallbacks in `docs/schedule.md`; optional features not built; experiment reduced; mandatory scope unchanged | All | Confirmed (v1.2) |
 
 ---
 
@@ -208,9 +209,25 @@
   ledger; before that an alert (AUDIT_DELAYED) is recorded instead of a finding.
 - **Affects:** `CHECKPOINT_COMMITTED`, `Finding.checkpoint`
 
-### D-15. AI model and calling — delegated to Anik
-- **Recommendation:** Claude API tool use, single agent; contract limits: 10 s per tool call, at most 20 steps.
-- **To decide:** model, who manages the API key, budget.
+### D-15. AI model and calling (v1.2: no paid AI)
+- **Decision (team lead, 2026-11-04):** the AI Audit Agent must cost **nothing**. Anything that needs money (paid API,
+  paid credits, a card on file, paid hardware) is dropped, not budgeted.
+  - **Allowed:** an open-weight model with a free licence run **locally** on the team's own PC (for example through
+    Ollama), single agent with tool calling. No API key, no budget. Neither the local model nor the template report
+    sends anything outside the machine.
+  - **Not used:** paid APIs (the former recommendation, Claude API) and free cloud tiers (they need an account and a key,
+    their limits and terms change, and the views would leave the machine).
+  - **Fallback (no AI):** if the local model fails the go / no-go check on 2026-11-20 (tool calls unreliable, too slow on
+    the available PC, or reports that do not validate), the agent is replaced by a **template report**: the same
+    read-only tools collect the evidence, and the B1 rule-ID → cause table fills the hypotheses. It is submitted in the
+    same `AuditReportSubmission` format with `model.provider = "none"` and is presented as an explanation aid, not as AI.
+  - If neither is ready by 2026-11-24, the agent is future work (the report says so). Reports are files: Core report
+    storage (EVIDENCE_NOT_FOUND) and the report screen are future work (D-28), so threat model A2 and T12 are not
+    implemented.
+- **Anik decides:** which local model (named in this entry after the check), the prompt; contract limits stay: 10 s per
+  tool call, at most 20 steps, `ABORTED` with `STEP_LIMIT` / `TIMEOUT` / `MODEL_ERROR`.
+- **Affects:** `docs/schedule.md`, `docs/roles/rules-ai.md`, `docs/test-plan.md` (B2), `docs/threat-model.md` (A3),
+  `.env.example`
 
 ### D-16. Link delivery
 - Development: MailHog; demo: a CSV downloadable once right after issuing.
@@ -339,8 +356,9 @@
     T14), final 12-04.
   - Mandatory scope unchanged (D-01): normal vote, roster amendment, voiding, R1–R5, T01, T02, T04, T05, T08, T15.
   - Not built: WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE, direct chain submissions, T03, T06, T07, T09–T13, T16.
-  - AI Audit Agent: **open, the team lead chooses** (a) future work, B2 not run (recommended), or (b) Anik builds it
-    11-17 – 11-24 within 3 days, dropped if R4 / R5 or Anik's 11-25 work slip.
+  - AI Audit Agent: zero cost only (D-15 v1.2). Anik tries a local free model 11-17 – 11-19, go / no-go on 11-20,
+    then the local agent or the template report by 11-24 (files; Core report storage is future work); not started if
+    R4 / R5 are late on 11-16, stopped at once if Anik's 11-25 work is at risk.
   - Experiment (test-plan): mandatory scenarios × seeds 1–3 (4–5 if time allows), demo configuration, baseline B1,
     2026-11-27 – 11-30; labels still committed before the first run.
   - D-27 measurements due 2026-11-13 instead of 11-09; D = 2 until then.
