@@ -1,4 +1,4 @@
-"""Stateful stand-in for the Ledger Gateway, for Core tests and local runs before week 3 (not a contract
+"""Stateful stand-in for the Ledger Gateway, for Core tests and local runs before M1 (not a contract
 implementation: no chain, no signature checks, anchors are pretend).
 
     uvicorn devtools.fake_gateway:app --port 8100      (from core/)

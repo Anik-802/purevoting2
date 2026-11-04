@@ -10,7 +10,7 @@ You own everything the voter and the staff touch, and the integration of the who
 - **Core API** (`contracts/core-api.openapi.yaml`, port 8000) — election state machine, PostgreSQL, outbox,
   checkpoints, views, tally, finalization, relaying signed approvals and reviews;
 - **Voter web** and **admin web**;
-- **Integration** — `docker-compose.yml`, `.env.example`, demo scripts, the week 3 / 5 / 7 integration runs.
+- **Integration** — `docker-compose.yml`, `.env.example`, demo scripts, the M1–M4 integration runs (`docs/schedule.md`).
 
 You do **not** own: the chain or the Gateway (Harits), judging anomalies (Anik). Core never signs on behalf of an
 organization and never creates findings; it only relays signatures made in the signer's own client.
@@ -43,7 +43,7 @@ organization and never creates findings; it only relays signatures made in the s
 1. **Elections:**
    - Create elections with `config_hash`, `public_key_hash` and a bucket-aligned window. The operator org comes from the registry, never from the login.
    - Create the election's X25519 key pair; keep the private key until it is revealed at the TALLY checkpoint (D-23).
-   - Run the **creation check** once ELECTION_CREATED is ACCEPTED or DUPLICATE: read `electionState` and `electionGovernance` from the pinned node and compare them with the event. `creation_check` is PENDING, PASSED or MISMATCH. Node behind `block_number` → retry; unreachable for 60 s → LEDGER_UNAVAILABLE alert; `configHash == 0` 60 s after the node reached the block → MISMATCH (not found). Until PASSED, deliver no further outbox event of the election. Before week 3 a dev-only node stub may return the expected values; it must be removed for T01.
+   - Run the **creation check** once ELECTION_CREATED is ACCEPTED or DUPLICATE: read `electionState` and `electionGovernance` from the pinned node and compare them with the event. `creation_check` is PENDING, PASSED or MISMATCH. Node behind `block_number` → retry; unreachable for 60 s → LEDGER_UNAVAILABLE alert; `configHash == 0` 60 s after the node reached the block → MISMATCH (not found). Until PASSED, deliver no further outbox event of the election. Before M1 a dev-only node stub may return the expected values; it must be removed for T01.
    - Until the check is PASSED, refuse freeze, issue and admin actions. On MISMATCH, only deletion is possible.
 2. **Roster and links:**
    - Roster PUT only in DRAFT.
@@ -103,17 +103,17 @@ organization and never creates findings; it only relays signatures made in the s
   - signing keys: the approver loads their org's signer key into the admin web (file or paste, kept in browser memory only). Core never reads `ORG_*_SIGNER_KEY`; only the registry setup script and the scenario scripts do.
 
 ### 4.3 Integration
-- `docker-compose.yml` brings up the DB, Core, web, nodes, Gateway, Rule Engine and (AI). Each owner hands you a Dockerfile, a compose block with a healthcheck and their `.env` keys by week 2; you merge them in the bootstrap order of system-design section 7 (#6).
+- `docker-compose.yml` brings up the DB, Core, web, nodes, Gateway, Rule Engine and (AI). Each owner hands you a Dockerfile, a compose block with a healthcheck and their `.env` keys by 11-09 (`docs/schedule.md`); you merge them in the bootstrap order of system-design section 7 (#6).
 - `.env.example` lists ports, service keys, demo org keys, the pinned chain configuration and demo election settings used by scripts (no Core default, D-10). Secrets are never committed.
 - Demo configuration: 100 voters, 10-minute window, 60 s bucket and checkpoint interval.
-- Run the integration tests at weeks 3, 5 and 7, and call the supervisor agent after each.
+- Run the integration tests at M1, M2, M3 and M4 (`docs/schedule.md`), and call the supervisor agent after each.
 
 ## 5. Optional features
 WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE; AI report storage and review screen; service logs; outbox resume
 screen.
 
 ## 6. Pitfalls
-- **Hashing must match bit for bit.** Port the reference functions from `tools/validate_contracts.py` and reproduce every vector in `tests/vectors/hash-vectors.json` in week 1 (regenerate it with `tools/make_hash_vectors.py` only if `hashing.md` changes).
+- **Hashing must match bit for bit.** Port the reference functions from `tools/validate_contracts.py` and reproduce every vector in `tests/vectors/hash-vectors.json` before the first integration (regenerate it with `tools/make_hash_vectors.py` only if `hashing.md` changes).
 - **Time on voter rows:**
   - Voter-side rows store only bucket and checkpoint values, never exact times.
   - Their primary keys are random.
@@ -127,19 +127,13 @@ screen.
 
 ## 7. Tests you own
 - **Mandatory scenarios (you drive them as integrator):** T01, T02, T04, T05, T08 and T15. The setup and fault injection scripts live in `tests/scenarios/`.
-- **Ground-truth labels:** Harits writes them before any run (T01 before week 3, the others before week 5); you write the setup / fault-injection scripts.
+- **Ground-truth labels:** Harits writes them before any run (dates in `docs/schedule.md`, always before the first run); you write the setup / fault-injection scripts.
 - **T14:** a fresh-PC demo.
 - **Optional:** T03, T06, T09, T10, T13 and T16.
 
 ## 8. Milestones
 
-| When | Done when |
-|---|---|
-| Week 1 | Repo skeleton, `docker-compose.yml` with DB + Core, `tests/vectors/hash-vectors.json` reproduced |
-| Week 2 | Election → roster → links → redeem → ballot → outbox against the Gateway mock; checkpoints and views; **`/internal/v1/elections`, `/internal/v1/checkpoints`, `/internal/v1/views*`, `POST /internal/v1/findings` (record lookup at the Gateway mock)**; creation check against the pinned node (dev stub allowed until week 3); merge the other owners' compose blocks |
-| **Week 3** | **T01 end to end** with the real Gateway and Rule Engine |
-| **Week 5** | Admin actions (ROSTER_AMEND, ELECTION_VOID), tally, finalize; T02, T04, T05, T08, T15 |
-| **Week 7** | Demo rehearsal on a fresh PC (T14) |
+Dates for every item below and the milestones M1–M4: **`docs/schedule.md`** (D-28, replaces the former week table).
 
 ## 9. First issues
 1. Repo skeleton, `docker-compose.yml`, `.env.example`, CI for module tests.
@@ -148,9 +142,9 @@ screen.
 4. Elections + creation check; roster + freeze; token issue.
 5. Redeem + ballots.
 6. Outbox worker (seq, bucket release, outcomes) + checkpoints + views + internal endpoints for the Rule Engine.
-7. Findings storage (`POST /internal/v1/findings`) — week 2, needed for T01.
+7. Findings storage (`POST /internal/v1/findings`) — needed for T01.
 8. Admin actions (ROSTER_AMEND, ELECTION_VOID) + approval relay.
 9. Review relay; tally; finalize.
 10. Voter web; admin web (signing screens).
-11. Staff-account setup script — week 2 (T01 needs an admin JWT; it runs before Core in the bootstrap order).
+11. Staff-account setup script (T01 needs an admin JWT; it runs before Core in the bootstrap order).
 12. Scenario scripts for the mandatory tests.

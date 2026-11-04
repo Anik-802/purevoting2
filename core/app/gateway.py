@@ -1,6 +1,6 @@
 """Client for the Ledger Gateway (contracts/ledger-gateway.openapi.yaml), called with coreKey.
 
-Until week 3 the other side is a mock (prism, or tools/fake_gateway.py for a stateful run); the client does not care.
+Until M1 (docs/schedule.md) the other side is a mock (prism, or tools/fake_gateway.py for a stateful run); the client does not care.
 """
 import httpx
 

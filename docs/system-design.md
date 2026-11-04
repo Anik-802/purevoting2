@@ -249,8 +249,8 @@ distinguished by JWT roles (`admin`, `approver`, `auditor`). The AI agent can on
 | 2 | Contract freeze | Frozen at v1.0. Changed only by PR when implementation is blocked (@mention the owners + one CHANGELOG line, no mandatory approval) |
 | 3 | Shared code | No shared library. Everyone implements hashing, signatures and Merkle trees themselves and must reproduce every vector in `tests/vectors/hash-vectors.json` (generated from `hashing.md` by `tools/make_hash_vectors.py`; covers leaf_hash, rejection_leaf, rejections_root, target_hash per action type, config_hash, roster_hash, token_set_root, receipt_hash, ballot_set_root, result_hash, snapshot_hash and the signature digests). Each module's CI checks them |
 | 4 | Independent development | At first, replace the other services with OpenAPI mocks (prism). Real connections start at the integration points |
-| 5 | Integration points | Week 3 T01, week 5 mandatory fault tests, week 7 demo rehearsal. Seungmin is the integrator |
-| 6 | Running | `docker compose up` starts everything. Ports, service keys and organization keys live in one `.env`. Separate demo configuration. Each owner ships a Dockerfile, a compose service block with a healthcheck and their `.env` keys by week 2; Seungmin merges them. Bootstrap order: nodes → contract deploy (deterministic address, or an init job that writes `CONTRACT_ADDRESS`) → registry setup script (Harits) → staff-account setup script (Seungmin) → Core, Gateway, Rule Engine |
+| 5 | Integration points | M1 11-11 (T01), M2 11-19 (demo version), M3 11-26 (mandatory tests), M4 12-01 (fresh-PC rehearsal); `docs/schedule.md` (D-28). Seungmin is the integrator |
+| 6 | Running | `docker compose up` starts everything. Ports, service keys and organization keys live in one `.env`. Separate demo configuration. Each owner ships a Dockerfile, a compose service block with a healthcheck and their `.env` keys by 11-09 (`docs/schedule.md`); Seungmin merges them. Bootstrap order: nodes → contract deploy (deterministic address, or an init job that writes `CONTRACT_ADDRESS`) → registry setup script (Harits) → staff-account setup script (Seungmin) → Core, Gateway, Rule Engine |
 | 7 | Scope | Split into mandatory and optional (section 9) |
 | 8 | Progress sharing | Work tracked in GitHub Issues. Once a week everyone shares "done / blocked / contract change requests" |
 
@@ -296,18 +296,20 @@ The platform (D-02) and the AI model (D-15) are chosen by their owners. All othe
 
 ## 9. Schedule and scope
 
-| Week | Goal | Done when |
+The 8-week plan was replaced on 2026-11-04 by **`docs/schedule.md`** (D-28): demo version on 2026-11-19, final on
+2026-12-04. Milestones, per-owner dates, handoffs and fallbacks are kept there only.
+
+| # | Date | Milestone |
 |---|---|---|
-| 1–2 | Repository and environment, each module's core features against mocks, hash test vectors | Each module talks to its mocks; test vectors pass; the T01 path **including finding registration and body storage** works against mocks; registry setup script and pinned node exist |
-| **3** | **Integration 1: normal vote** | T01 path runs end to end (vote → receipt ANCHORED → R1–R5 findings recorded); reported as "T01 (partial R4/R5)" if any rule check is still unimplemented |
-| 4–5 | Mandatory fault handling, admin actions, tally and finalization | — |
-| **5** | **Integration 2: mandatory fault tests** | full T01 pass; T02, T04, T05, T08, T15 pass |
-| 6–7 | Optional features (window change, early close, reissue, T10, T11, direct submissions) | Whatever fits |
-| **7** | **Integration 3: demo rehearsal** | On a fresh PC, `docker compose up` and demo a normal vote plus 2 faults (T14) |
-| 8 | AI Audit Agent (if time allows), experiments, report, presentation | — |
+| M1 | 11-11 | Integration 1: T01 on the real stack |
+| M2 | 11-19 | **Demo version** (normal election finalized; T05 / T08 faults detected, finalize refused) |
+| M3 | 11-26 | Mandatory scope complete (roster amendment, voiding, signed reviews; T01, T02, T04, T05, T08, T15) |
+| M4 | 12-01 | Code freeze, fresh-PC rehearsal (T14), experiment runs |
+| F | 12-04 | Final report, presentation and demo |
 
 **Mandatory:** normal vote, roster amendment, voiding, rules R1–R5, tests T01, T02, T04, T05, T08, T15.
-**Optional:** window change, early close, link reissue, direct chain submissions, AI Audit Agent, remaining tests.
+**Not built (D-28):** window change, early close, link reissue, direct chain submissions, the remaining tests; the AI
+Audit Agent only as decided in D-28.
 
 ---
 
@@ -378,8 +380,8 @@ purevoting2/
 
 | Risk | Response |
 |---|---|
-| Short schedule for the size of the contracts | Mandatory / optional split; re-scope at the week 3, 5 and 7 integration points |
-| Hash or signature computation differs between modules | `tests/vectors/hash-vectors.json` mandatory in every module's CI, done within weeks 1–2 |
+| Short schedule for the size of the contracts | Mandatory / optional split; re-scope at the M1–M4 integration points with the fallbacks fixed in D-28 |
+| Hash or signature computation differs between modules | `tests/vectors/hash-vectors.json` mandatory in every module's CI, done before the first integration |
 | Blocked waiting for each other | Independent development against mocks |
 | Different readings of the contracts | When blocked, open an Issue → change the contract by PR. No verbal-only agreements |
 | Overclaiming in presentations | Keep to "What we do not claim" (section 1) and the threat model |

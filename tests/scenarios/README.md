@@ -21,8 +21,7 @@ folder (`T04-core`, `T04-injected`, `T08a`, `T08b`, `T08c`, `T15a` … `T15d`, �
   `"refused_by": "contract"` (or `"core"`, `"gateway"`) and the rules as evaluated afterwards.
 - Each rule is exactly one of PASS / FAIL / INCONCLUSIVE (no "and/or"); `observed_nonzero` lists the `observed` keys
   (contracts/README.md "Audit rules") expected to be non-zero.
-- **Owner:** Harits for T01, T02, T04, T05, T08, T15 (Anik never writes labels). **Deadline:** T01 before week 3, the
-  others before week 5. Committed **before** the first run and never edited after seeing results.
+- **Owner:** Harits for T01, T02, T04, T05, T08, T15 (Anik never writes labels). **Deadline:** `docs/schedule.md` (D-28). Committed **before** the first run and never edited after seeing results.
 - The B1 rule-ID → cause mapping table (`docs/test-plan.md`) is written by the same person, together with the labels.
 - Mandatory scenarios: T01, T02, T04, T05, T08, T15; the rest are optional.
 - Record the commit hash, seed and configuration (evaluation or demo) of every run.

@@ -38,7 +38,7 @@ PRESETS = {
     "demo": {"voters": 100, "bucket": 60, "buckets": 10, "votes": 3},
     "quick": {"voters": 20, "bucket": 30, "buckets": 2, "votes": 3},
 }
-# rules-ai.md week 3: a partly implemented rule lists its unimplemented checks in `summary`
+# rules-ai.md section 8: a partly implemented rule lists its unimplemented checks in `summary`
 PARTIAL = re.compile(r"not (yet )?implemented|unimplemented", re.IGNORECASE)
 
 
@@ -280,7 +280,7 @@ def main(argv=None) -> int:
         elif rec["problems"]:
             rec["verdict"], code = "FAIL", 1
         elif rec["partial"]:
-            rec["verdict"] = f"T01 (partial {'/'.join(rec['partial'])})"   # not a T01 pass (rules-ai.md week 3)
+            rec["verdict"] = f"T01 (partial {'/'.join(rec['partial'])})"   # not a T01 pass (rules-ai.md section 8)
         else:
             rec["verdict"], code = "PASS", 0
     except Failed as exc:

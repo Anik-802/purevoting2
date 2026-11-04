@@ -1,4 +1,4 @@
-# Design decisions (v1.1)
+# Design decisions (v1.2)
 
 > 2026-10-18 v1.0: after a supervisor review (DECISIONS VERDICT: READY TO CONFIRM) every item except D-02 and D-15 is
 > **confirmed as recommended**. Wording added at confirmation is marked **Confirmed note (v1.0)**. D-02 is delegated to
@@ -10,6 +10,8 @@
 > 2026-11-02 v1.1: D-02 confirmed (PureChain, on Harits's delegation), D-03 node count set, new D-27 (confirmation depth),
 > after two supervisor reviews of the answers to Harits's open questions. Values marked *provisional* wait for Harits's
 > measurement (due 2026-11-09). Contracts changed accordingly (v1.1, `contracts/CHANGELOG.md`).
+> 2026-11-04 v1.2: new D-28 (schedule compression: demo 2026-11-19, final 2026-12-04, `docs/schedule.md`), after
+> three supervisor reviews of the schedule (PASS). D-27's measurement deadline moves to 2026-11-13.
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -44,6 +46,7 @@
 | D-25 | Rule Engine operator | ruleKey held and operated by an org other than the commission and the Gateway operator (demo: observer, v1.1) | All | Confirmed (v1.1) |
 | D-26 | Gateway operator | Neutral org. It can delay relaying but cannot forge signed approvals, reviews or findings; signers can submit directly on chain | Harits | Confirmed |
 | D-27 | Confirmation depth | A chain item counts only in a block with ≥ D blocks on top (D = 2, *provisional*); pinned like the contract address | Harits, Seungmin, Anik | Confirmed (v1.1) |
+| D-28 | Schedule compression | Demo version 2026-11-19, final 2026-12-04; milestones M1–M4, per-owner dates, handoffs and fallbacks in `docs/schedule.md`; optional features not built; experiment reduced; mandatory scope unchanged | All | Confirmed (v1.2; AI agent option open) |
 
 ---
 
@@ -326,3 +329,22 @@
   rewrite the chain to any depth; this is detected afterwards by R5 and Core comparisons (threat model I15), not prevented.
 - **Affects:** `contracts/chain-interface.md`, `contracts/ledger-gateway.openapi.yaml`, `contracts/README.md`, `.env.example`,
   `docker-compose.yml`, `docs/threat-model.md` (I15), `docs/test-plan.md` (T07, T10), `docs/roles/*`
+
+### D-28. Schedule compression (v1.2)
+- **Background:** the project must show a full demo on 2026-11-19 and be finished by 2026-12-04, instead of the 8-week
+  plan of system-design section 9 (D-01 "2-month scope").
+- **Decision**
+  - `docs/schedule.md` replaces the week table of system-design section 9 and the milestone tables of `docs/roles/*`:
+    M1 11-11 (T01 on the real stack), M2 11-19 (demo version), M3 11-26 (mandatory scope), M4 12-01 (code freeze,
+    T14), final 12-04.
+  - Mandatory scope unchanged (D-01): normal vote, roster amendment, voiding, R1–R5, T01, T02, T04, T05, T08, T15.
+  - Not built: WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE, direct chain submissions, T03, T06, T07, T09–T13, T16.
+  - AI Audit Agent: **open, the team lead chooses** (a) future work, B2 not run (recommended), or (b) Anik builds it
+    11-17 – 11-24 within 3 days, dropped if R4 / R5 or Anik's 11-25 work slip.
+  - Experiment (test-plan): mandatory scenarios × seeds 1–3 (4–5 if time allows), demo configuration, baseline B1,
+    2026-11-27 – 11-30; labels still committed before the first run.
+  - D-27 measurements due 2026-11-13 instead of 11-09; D = 2 until then.
+  - Milestone verdicts are PASS / CONDITIONAL / FAIL; work continues in parallel and P1 findings are fixed before the next
+    run. Fallbacks (`docs/schedule.md` section 4) are fixed now and switched on by one line here when needed.
+- **Affects:** `docs/schedule.md`, `docs/system-design.md` (sections 7, 9, risks), `docs/roles/*` (milestones),
+  `docs/test-plan.md` (experiment protocol), `tests/scenarios/README.md` (label deadlines)

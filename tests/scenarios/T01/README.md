@@ -58,7 +58,7 @@ before window_start for the creation check, freeze and link issue; raise it if t
 |---|---|
 | `PASS` — as labelled | 0 |
 | `FAIL` — differs from the label, a receipt LEDGER_REJECTED, or the opening REJECTED | 1 |
-| `T01 (partial R4/R5)` — as labelled, but a deciding finding's `summary` says a check is not implemented (`docs/roles/rules-ai.md` week 3); not a T01 pass | 2 |
+| `T01 (partial R4/R5)` — as labelled, but a deciding finding's `summary` says a check is not implemented (`docs/roles/rules-ai.md` section 8); not a T01 pass | 2 |
 | `NOT JUDGED` (no `expected.json`) or `NOT COMPLETED` (stopped before the end) | 2 |
 
 The run record (`t01-runs/T01-seed<n>-<time>.json`, not committed) holds the commit (`-dirty` if the tree had

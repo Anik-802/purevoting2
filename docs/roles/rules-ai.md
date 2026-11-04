@@ -105,7 +105,7 @@ the observer org (`org_observer`, D-25 v1.1; the registry setup script's default
 ## 6. Pitfalls
 - **Hashing must match bit for bit.**
   - Port `H`, `canonical` (RFC 8785), `merkle_root` and `set_root` from `tools/validate_contracts.py`.
-  - Reproduce every vector in `tests/vectors/hash-vectors.json` in week 1 (R5 recomputes most of these values).
+  - Reproduce every vector in `tests/vectors/hash-vectors.json` before the first integration (R5 recomputes most of these values).
   - `set_root` sorts and removes duplicates. `ballot_set_root` sorts but **keeps** duplicates.
 - **Delivery order.** When CHECKPOINT_COMMITTED k is accepted, every voter event ≤ k already has a final outcome (accepted or rejected), so counts need no grace period.
 - **Read the README literally.** Rule conditions use exact definitions:
@@ -137,14 +137,10 @@ Self-test without Core / Gateway: prism mocks of both OpenAPI files plus the fix
 
 ## 8. Milestones
 
-| When | Done when |
-|---|---|
-| Week 1 | `tests/vectors/hash-vectors.json` reproduced; finding body builder validates against the schema |
-| Week 2 | Discovery + run loop against mocks; R1–R3 on example data; finding registration + body storage against mocks |
-| **Week 3** | **T01 with real Core and Gateway.** A partially implemented rule lists its unimplemented checks in `summary`, and the run is reported as "T01 (partial R4/R5)", not as a T01 pass; the full T01 pass is re-run in week 5 |
-| **Week 5** | R4 and R5 complete; full T01 pass; T02, T04, T05, T08, T15 give the expected results |
-| **Week 7** | Demo rehearsal (T05 → R4 FAIL, T08 → R5 FAIL shown live) |
-| Week 8 | AI Audit Agent if time allows; experiment runs (B1 vs B2) |
+Dates for every item below and the milestones M1–M4: **`docs/schedule.md`** (D-28, replaces the former week table).
+
+A partly implemented rule lists its unimplemented checks in `summary` with the words "not implemented"; a T01 run
+with such a finding is reported as "T01 (partial R4/R5)", not as a T01 pass.
 
 ## 9. First issues to open
 1. D-15 decision (AI model, key, budget) + PR to `docs/decisions.md`.

@@ -147,28 +147,22 @@ payload_hash, receipt_hash and result_hash are consistent in the examples; ancho
 placeholders — check your Merkle code against `tests/vectors/hash-vectors.json`, not against example anchors.
 
 **Ground-truth labels:** you write the labels (`tests/scenarios/<id>/expected.json`) for T01, T02, T04, T05, T08 and T15,
-and the B1 rule-ID → cause mapping table — T01 before week 3, the others before week 5 (see `tests/scenarios/README.md`).
+and the B1 rule-ID → cause mapping table — dates in `docs/schedule.md`, always before the first run (see `tests/scenarios/README.md`).
 Seungmin writes the setup scripts; Anik never writes labels.
 
 ## 8. Milestones
 
-| When | Done when |
-|---|---|
-| Week 1 | Platform chosen (D-02 PR); `tests/vectors/hash-vectors.json` reproduced; local chain + contract skeleton deployed |
-| Week 2 | Gateway accepts `POST /v1/events` for the T01 path and anchors them; **`POST /v1/finding-records` + contract finding records (no reviews yet); registry setup script (all three org signers, operatorOrg, ruleEngineSigner, gatewayAccount confirmed by all); pinned observer node RPC reachable**; Dockerfile + compose block + `.env` keys handed to Seungmin; queries work against the examples |
-| **Week 3** | **T01 with real Core** |
-| **Week 5** | T04, T05 and T15(d) pass; reviews, finalize quorum and proposals work end to end |
-| **Week 7** | Demo rehearsal: 3 validators (+ optional standby node) from `docker compose up` on a fresh PC |
+Dates for every item below and the milestones M1–M4: **`docs/schedule.md`** (D-28, replaces the former week table).
 
 ## 9. First issues to open
 1. D-02 decision + PR to `docs/decisions.md`.
 2. Hashing / digest library + `tests/vectors/hash-vectors.json`.
-3. Node setup (pinned node on the observer) + registry setup script + `.env` entries (chain id, contract address, pinned node URL) — week 1–2.
-4. Contract: registry + election state + checkpoints (with `electionStateAtCheckpoint`) — week 1–2.
-5. Gateway: `POST /v1/events` (seq, outcomes, voter checks, batching, rejections) — week 2.
-6. Contract + Gateway: finding records (`relayFindingRecord`, `POST /v1/finding-records`) — week 2 (needed for T01).
-7. Gateway: query endpoints + indexing of relayed chain events — week 2–3.
-8. Contract: anchors refusal rule, proposals + execution order — week 4.
+3. Node setup (pinned node on the observer) + registry setup script + `.env` entries (chain id, contract address, pinned node URL).
+4. Contract: registry + election state + checkpoints (with `electionStateAtCheckpoint`).
+5. Gateway: `POST /v1/events` (seq, outcomes, voter checks, batching, rejections).
+6. Contract + Gateway: finding records (`relayFindingRecord`, `POST /v1/finding-records`) (needed for T01).
+7. Gateway: query endpoints + indexing of relayed chain events.
+8. Contract: anchors refusal rule, proposals + execution order.
 
 ### v1.1 additions (2026-11-02, decisions D-02 / D-03 / D-27)
 - Gateway: confirmed-blocks rule, same-signed-transaction re-broadcast, exact-match handling of "already applied"
@@ -178,9 +172,9 @@ Seungmin writes the setup scripts; Anik never writes labels.
   `relayFindingRecord` use `hasCheckpoint` for "≤ last committed checkpoint"; optional bucket-alignment checks in
   createElection; optional `CheckpointCommitted` event.
 - Network: a mode that seals blocks continuously (empty blocks) with period P ≤ 5 s (provisional).
-- **Measurements due 2026-11-09:** mode name and P; one- and two-validator stop tests; deepest reorg observed in
+- **Measurements due 2026-11-13 (D-28; D = 2 until then):** mode name and P; one- and two-validator stop tests; deepest reorg observed in
   stop/restart tests (final D = max(2, that + 1)). Record them in D-02 / D-03 / D-27.
-9. Contract: reviews, finalize quorum — week 4–5.
+9. Contract: reviews, finalize quorum.
 10. (Optional) indexing of direct submissions.
 
 If a contract rule blocks you, open an issue and change the contract by PR (@mention the affected owners, one line in

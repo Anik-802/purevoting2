@@ -62,8 +62,10 @@ bucket (e.g. 60 s) and a small synthetic roster sized to the D-10 rule, stated a
 
 ## Experiment protocol
 
-- Scenarios: T01–T16 plus 10 randomly generated fault mixes; each scenario run 10 times with seeds 1–10 (fault timing and
-  voter order vary by seed).
+- Scenarios (D-28): the 6 mandatory scenarios (T01, T02, T04, T05, T08, T15), seeds 1–3 first and 4–5 if time allows
+  (fault timing and voter order vary by seed), in the demo configuration, scripted, 2026-11-27 – 11-30. Baseline B1;
+  B2 only if the AI Audit Agent is built; B0 described qualitatively. The report states that the evaluation
+  configuration and seeds 6–10 were not run. (Before D-28: T01–T16 plus 10 random fault mixes, seeds 1–10.)
 - Ground-truth labels for a scenario are written by a team member who does not implement the Rule Engine or the Audit
   Agent (Seungmin or Harits), committed before the first run, and never edited after seeing results.
 - Report per baseline: number of runs, failures and their causes, and all metrics with min / median / max over seeds.
