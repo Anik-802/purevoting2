@@ -1,0 +1,28 @@
+name: ledger
+
+on:
+  push:
+    paths: ["ledger/**", "contracts/chain-interface.md", "tests/vectors/**", ".github/workflows/ledger.yml"]
+  pull_request:
+    paths: ["ledger/**", "contracts/chain-interface.md", "tests/vectors/**", ".github/workflows/ledger.yml"]
+
+jobs:
+  offline:
+    # checks that need no chain; the on-chain suite (ledger/tests/test_ledger.py) needs a local PureChain network
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r tools/requirements.txt solc-select==1.0.4
+      - name: Hash vectors (pv_hash.py)
+        run: python -m unittest discover -s ledger/gateway/tests -v
+      - name: Signer module (pure checks)
+        run: python -I ledger/tests/test_ethsign.py
+      - name: solc 0.8.28 (ledger/README.md compiler settings)
+        run: solc-select install 0.8.28 && solc-select use 0.8.28 && solc --version
+      - name: Compile (optimizer on, EVM shanghai)
+        run: solc --evm-version shanghai --optimize --optimize-runs 200 --bin -o "$RUNNER_TEMP/out" ledger/contracts/PureVotingLedger.sol
+      - name: Selectors and events match contracts/chain-interface.md
+        run: python -I ledger/tests/check_interface.py . "$(command -v solc)"
