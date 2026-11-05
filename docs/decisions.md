@@ -15,7 +15,7 @@
 > (local free model, else a template report).
 > 2026-11-05 v1.2.1: D-15 / D-28 — the AI Audit Agent is part of the M2 demo (template 11-12, go / no-go 11-13,
 > integrated 11-17); every web screen demonstrable at M2 (approval / review screens on the fake Gateway until M3),
-> after supervisor reviews.
+> after supervisor reviews. M4, T14 (fresh-PC test) and the 12-04 date removed; everything finished by 11-30.
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -37,7 +37,7 @@
 | D-12 | Core ↔ ledger consistency | Outbox + seq; strict transitions applied at once and kept if rejected (alert); permissive ones applied after ACCEPTED, reverted if rejected | Seungmin, Harits | Confirmed |
 | D-13 | Rule Engine data access | Core read-only views (as of a checkpoint) + Gateway query API + direct node reads; no DB access | Anik, Seungmin | Confirmed |
 | D-14 | Rule / checkpoint cadence | Checkpoint interval = integer multiple of the bucket (default 1×) + on state changes; rules at every checkpoint + after closing + manual | Anik, Seungmin | Confirmed |
-| D-15 | AI model and calling | **No paid AI (v1.2):** a free open-weight model run locally (e.g. via Ollama), single agent; part of the M2 demo; if it fails the 11-13 check, a non-AI template report instead; anything that costs money is dropped | Anik | Confirmed (v1.2) |
+| D-15 | AI model and calling | **No paid AI (v1.2):** a free open-weight model run locally (runtime and model chosen by Anik), single agent; part of the M2 demo; if it fails the 11-13 check, a non-AI template report instead; anything that costs money is dropped | Anik | Confirmed (v1.2) |
 | D-16 | Link delivery | Development: MailHog (fake mailbox); demo: CSV export | Seungmin | Confirmed |
 | D-17 | Authentication | Staff: ID/password + JWT (admin / approver / auditor + org); **a different key per service** and a permission matrix | Seungmin | Confirmed |
 | D-18 | Repository and runtime | GitHub monorepo + docker compose + GitHub Actions | Seungmin | Confirmed |
@@ -50,7 +50,7 @@
 | D-25 | Rule Engine operator | ruleKey held and operated by an org other than the commission and the Gateway operator (demo: observer, v1.1) | All | Confirmed (v1.1) |
 | D-26 | Gateway operator | Neutral org. It can delay relaying but cannot forge signed approvals, reviews or findings; signers can submit directly on chain | Harits | Confirmed |
 | D-27 | Confirmation depth | A chain item counts only in a block with ≥ D blocks on top (D = 2, *provisional*); pinned like the contract address | Harits, Seungmin, Anik | Confirmed (v1.1) |
-| D-28 | Schedule compression | Demo version 2026-11-19, final 2026-12-04; milestones M1–M4, per-owner dates, handoffs and fallbacks in `docs/schedule.md`; optional features not built; experiment reduced; mandatory scope unchanged | All | Confirmed (v1.2) |
+| D-28 | Schedule compression | Demo version 2026-11-19, everything finished by 2026-11-30; milestones M1–M3, per-owner dates, handoffs and fallbacks in `docs/schedule.md`; optional features not built; experiment reduced; mandatory scope unchanged | All | Confirmed (v1.2) |
 
 ---
 
@@ -215,8 +215,8 @@
 ### D-15. AI model and calling (v1.2: no paid AI)
 - **Decision (team lead, 2026-11-04):** the AI Audit Agent must cost **nothing**. Anything that needs money (paid API,
   paid credits, a card on file, paid hardware) is dropped, not budgeted.
-  - **Allowed:** an open-weight model with a free licence run **locally** on the team's own PC (for example through
-    Ollama), single agent with tool calling. No API key, no budget. Neither the local model nor the template report
+  - **Allowed:** an open-weight model with a free licence run **locally** on the team's own PC (runtime and model
+    chosen by Anik), single agent with tool calling. No API key, no budget. Neither the local model nor the template report
     sends anything outside the machine.
   - **Not used:** paid APIs (the former recommendation, Claude API) and free cloud tiers (they need an account and a key,
     their limits and terms change, and the views would leave the machine).
@@ -355,14 +355,14 @@
   `docker-compose.yml`, `docs/threat-model.md` (I15), `docs/test-plan.md` (T07, T10), `docs/roles/*`
 
 ### D-28. Schedule compression (v1.2)
-- **Background:** the project must show a full demo on 2026-11-19 and be finished by 2026-12-04, instead of the 8-week
+- **Background:** the project must show a full demo on 2026-11-19 and finish everything by 2026-11-30, instead of the 8-week
   plan of system-design section 9 (D-01 "2-month scope").
 - **Decision**
   - `docs/schedule.md` replaces the week table of system-design section 9 and the milestone tables of `docs/roles/*`:
-    M1 11-11 (T01 on the real stack), M2 11-19 (demo version), M3 11-26 (mandatory scope), M4 12-01 (code freeze,
-    T14), final 12-04.
+    M1 11-11 (T01 on the real stack), M2 11-19 (demo version), M3 11-26 (mandatory scope); everything finished by
+    11-30 (v1.2.1: M4, T14 and the 12-04 date removed).
   - Mandatory scope unchanged (D-01): normal vote, roster amendment, voiding, R1–R5, T01, T02, T04, T05, T08, T15.
-  - Not built: WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE, direct chain submissions, T03, T06, T07, T09–T13, T16.
+  - Not built: WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE, direct chain submissions, T03, T06, T07, T09–T14, T16 (T14 fresh-PC test dropped in v1.2.1).
   - AI Audit Agent: zero cost only (D-15 v1.2), part of the M2 demo. Anik builds the template report by 11-12, checks
     a local free model on 11-13 (go / no-go) and integrates the agent by 11-17 (files; Core report storage is future
     work); R4 / R5 (11-16) and Anik's 11-25 work come first.

@@ -152,7 +152,7 @@ Seungmin writes the setup scripts; Anik never writes labels.
 
 ## 8. Milestones
 
-Dates for every item below and the milestones M1–M4: **`docs/schedule.md`** (D-28, replaces the former week table).
+Dates for every item below and the milestones M1–M3: **`docs/schedule.md`** (D-28, replaces the former week table).
 
 ## 9. First issues to open
 1. D-02 decision + PR to `docs/decisions.md`.

@@ -57,7 +57,7 @@ services:
   #   ...
 
   # OWNER Anik (rules/): audit-agent for the M2 demo (D-15 v1.2, zero cost). Needs AGENT_KEY, CORE_URL, GATEWAY_URL
-  # (most agent tools are Gateway reads), AI_PROVIDER (none = template report, ollama = local model), AI_BASE_URL,
+  # (most agent tools are Gateway reads), AI_PROVIDER (none = template report, else the local runtime Anik picks), AI_BASE_URL,
   # AI_MODEL and a volume for the report files; on a Linux host extra_hosts: ["host.docker.internal:host-gateway"];
   # depends on core and ledger-gateway being healthy.
   #

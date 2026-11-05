@@ -10,7 +10,7 @@ You own everything the voter and the staff touch, and the integration of the who
 - **Core API** (`contracts/core-api.openapi.yaml`, port 8000) — election state machine, PostgreSQL, outbox,
   checkpoints, views, tally, finalization, relaying signed approvals and reviews;
 - **Voter web** and **admin web**;
-- **Integration** — `docker-compose.yml`, `.env.example`, demo scripts, the M1–M4 integration runs (`docs/schedule.md`).
+- **Integration** — `docker-compose.yml`, `.env.example`, demo scripts, the M1–M3 integration runs (`docs/schedule.md`).
 
 You do **not** own: the chain or the Gateway (Harits), judging anomalies (Anik). Core never signs on behalf of an
 organization and never creates findings; it only relays signatures made in the signer's own client.
@@ -106,7 +106,7 @@ organization and never creates findings; it only relays signatures made in the s
 - `docker-compose.yml` brings up the DB, Core, web, nodes, Gateway, Rule Engine and (AI). Each owner hands you a Dockerfile, a compose block with a healthcheck and their `.env` keys by 11-09 (`docs/schedule.md`); you merge them in the bootstrap order of system-design section 7 (#6).
 - `.env.example` lists ports, service keys, demo org keys, the pinned chain configuration and demo election settings used by scripts (no Core default, D-10). Secrets are never committed.
 - Demo configuration: 100 voters, 10-minute window, 60 s bucket and checkpoint interval.
-- Run the integration tests at M1, M2, M3 and M4 (`docs/schedule.md`), and call the supervisor agent after each.
+- Run the integration tests at M1, M2 and M3 (`docs/schedule.md`), and call the supervisor agent after each.
 
 ## 5. Optional features
 WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE; AI report storage and review screen; service logs; outbox resume
@@ -128,12 +128,11 @@ screen.
 ## 7. Tests you own
 - **Mandatory scenarios (you drive them as integrator):** T01, T02, T04, T05, T08 and T15. The setup and fault injection scripts live in `tests/scenarios/`.
 - **Ground-truth labels:** Harits writes them before any run (dates in `docs/schedule.md`, always before the first run); you write the setup / fault-injection scripts.
-- **T14:** a fresh-PC demo.
 - **Optional:** T03, T06, T09, T10, T13 and T16.
 
 ## 8. Milestones
 
-Dates for every item below and the milestones M1–M4: **`docs/schedule.md`** (D-28, replaces the former week table).
+Dates for every item below and the milestones M1–M3: **`docs/schedule.md`** (D-28, replaces the former week table).
 
 ## 9. First issues
 1. Repo skeleton, `docker-compose.yml`, `.env.example`, CI for module tests.

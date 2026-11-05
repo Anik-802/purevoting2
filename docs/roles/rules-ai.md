@@ -101,7 +101,7 @@ the observer org (`org_observer`, D-25 v1.1; the registry setup script's default
   - It submits an `AuditReportSubmission` without `human_review`. Every entry in `evidence_refs` and `counter_evidence_refs` must resolve. Until Core report storage exists (future work,
     D-28) the report is a file and the read-only script checks this; with Core storage Core would answer 422 EVIDENCE_NOT_FOUND.
   - Staff review the report. It is advisory: finalization never depends on it.
-  - **Zero API cost (D-15 v1.2):** a free open-weight model run locally (e.g. Ollama); no paid API, no cloud tier; nothing
+  - **Zero API cost (D-15 v1.2):** a free open-weight model run locally (runtime and model are your choice); no paid API, no cloud tier; nothing
     leaves the machine. The template report by 2026-11-12, go / no-go on 2026-11-13, integrated for the M2 demo by 11-17
     (`docs/schedule.md`). Reports are written as files (Core report storage is future work, D-28), so the agent keeps
     its own list of reported findings (`has_report` stays false); evidence refs are checked by a read-only script.
@@ -151,7 +151,7 @@ Self-test without Core / Gateway: prism mocks of both OpenAPI files plus the fix
 
 ## 8. Milestones
 
-Dates for every item below and the milestones M1–M4: **`docs/schedule.md`** (D-28, replaces the former week table).
+Dates for every item below and the milestones M1–M3: **`docs/schedule.md`** (D-28, replaces the former week table).
 
 A partly implemented rule lists its unimplemented checks in `summary` with the words "not implemented"; a T01 run
 with such a finding is reported as "T01 (partial R4/R5)", not as a T01 pass.
