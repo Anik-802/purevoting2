@@ -15,7 +15,7 @@ list T01–T14, plus T15–T16 added for tally and review governance) will be ex
 - Ground-truth labels for each injected fault are written **before** running the Rule Engine / AI, in
   `tests/scenarios/<id>/expected.json` (expected rule results and cause code).
 - Baselines for the experiment: (B0) original PureVoting behaviour, (B1) rules only, (B2) rules + AI (a free local model,
-  D-15 v1.2; run only if it passed the 2026-11-20 check; a template report without AI is not B2).
+  D-15 v1.2; run only if it go was confirmed on 2026-11-17; a template report without AI is not B2).
   Metrics: precision / recall / false-positive rate of FAIL, root-cause accuracy vs label (for B1 a fixed rule-ID → cause
   mapping table, written with the labels, gives its 'cause'), evidence validity rate,
   AI tokens and time to report (API cost is 0: no paid AI, D-15 v1.2). B2 evidence validity is measured offline by a

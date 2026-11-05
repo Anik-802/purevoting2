@@ -52,7 +52,8 @@ services:
       retries: 10
 
   # Stand-in Gateway for Core development before week 3 (no chain, no signature checks): docker compose --profile mock up
-  # Removed when Harits's ledger-gateway service is merged under the same name.
+  # Kept in the mock profile until 11-24 (part B of the M2 demo runs on it); Harits's real ledger-gateway comes in only
+  # through docker-compose.integration.yml (docs/schedule.md).
   ledger-gateway:
     profiles: ["mock"]
     build:

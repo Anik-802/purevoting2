@@ -365,7 +365,7 @@ purevoting2/
 - **Experiment baselines:**
   - B0: original PureVoting
   - B1: rules only
-  - B2: rules + AI (free local model, only if it passed the 11-20 check)
+  - B2: rules + AI (free local model, only if the go was confirmed on 11-17)
   - Metrics: FAIL precision and recall, root-cause accuracy, evidence validity, AI tokens and time (cost 0)
 - **Demo flow (draft):**
   1. Normal vote

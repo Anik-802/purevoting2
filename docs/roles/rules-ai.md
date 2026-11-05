@@ -96,13 +96,15 @@ the observer org (`org_observer`, D-25 v1.1; the registry setup script's default
 8. **Chain configuration.** Read only the pinned chain configuration from `.env` (chain id, contract address, pinned node URLs, `CONFIRMATION_DEPTH`). `PINNED_NODE_URL` is a comma-separated list (observer first, commission second): try the URLs in order. If Gateway `/v1/chain` differs (including `confirmation_depth`), raise CHAIN_CONFIG_MISMATCH. A direct `submitFindingRecord` counts as recorded only once its block is confirmed.
 
 ## 5. Optional features
-- **AI Audit Agent.**
+- **AI Audit Agent.** Optional in the contracts, but part of the M2 demo (D-15 v1.2, `docs/schedule.md`).
   - It polls `GET /internal/v1/findings?has_report=false` for FAIL / INCONCLUSIVE findings and investigates with the tools in `audit-report.schema.json#/$defs/AgentTool` only.
-  - It submits an `AuditReportSubmission` without `human_review`. Every entry in `evidence_refs` and `counter_evidence_refs` must resolve, otherwise Core answers 422 EVIDENCE_NOT_FOUND.
+  - It submits an `AuditReportSubmission` without `human_review`. Every entry in `evidence_refs` and `counter_evidence_refs` must resolve. Until Core report storage exists (future work,
+    D-28) the report is a file and the read-only script checks this; with Core storage Core would answer 422 EVIDENCE_NOT_FOUND.
   - Staff review the report. It is advisory: finalization never depends on it.
   - **Zero API cost (D-15 v1.2):** a free open-weight model run locally (e.g. Ollama); no paid API, no cloud tier; nothing
-    leaves the machine. Go / no-go on 2026-11-20 (`docs/schedule.md`). Reports are written as files (Core report storage
-    is future work, D-28); evidence refs are checked by a read-only script.
+    leaves the machine. The template report by 2026-11-12, go / no-go on 2026-11-13, integrated for the M2 demo by 11-17
+    (`docs/schedule.md`). Reports are written as files (Core report storage is future work, D-28), so the agent keeps
+    its own list of reported findings (`has_report` stays false); evidence refs are checked by a read-only script.
   - **Template report (no-go fallback, not AI):** must validate against `audit-report.schema.json`:
     - `model = {"provider": "none", "name": "template", "prompt_version": "1.0.0"}` (x.y.z pattern);
     - hypotheses from the B1 rule-ID → cause table, whose causes are values of `common.schema.json#/$defs/CauseCode`
@@ -142,7 +144,7 @@ the observer org (`org_observer`, D-25 v1.1; the registry setup script's default
 
 **Experiment fairness.**
 - Ground-truth labels for each scenario (`tests/scenarios/<id>/expected.json`) are written and committed by Harits **before** the first run, and never edited after seeing results.
-- Baselines: B1 rules only, B2 rules + local AI agent (only if it passed the 11-20 check).
+- Baselines: B1 rules only, B2 rules + local AI agent (only if the go was confirmed on 11-17).
 - Metrics: FAIL precision / recall, root-cause accuracy, evidence validity, AI tokens and time to report; API cost is 0 (`docs/test-plan.md`).
 
 Self-test without Core / Gateway: prism mocks of both OpenAPI files plus the fixtures in `contracts/examples/`.
@@ -155,7 +157,7 @@ A partly implemented rule lists its unimplemented checks in `summary` with the w
 with such a finding is reported as "T01 (partial R4/R5)", not as a T01 pass.
 
 ## 9. First issues to open
-1. D-15 (v1.2, zero cost): name the local model in `docs/decisions.md` after the 11-20 check.
+1. D-15 (v1.2, zero cost): name the local model and its digest in `docs/decisions.md` after the 11-13 check.
 2. Hashing library + `tests/vectors/hash-vectors.json`.
 3. Finding builder (FindingSubmission, local schema validation, durable store, signing).
 4. Discovery + run scheduler (run condition, timeout, alerts).
