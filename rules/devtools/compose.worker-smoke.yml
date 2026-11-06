@@ -1,0 +1,11 @@
+# Use only in the separate development project. Paths are relative to the first compose file (repository root).
+services:
+  ledger-gateway:
+    command: ["uvicorn", "rules_dev.audit_smoke_gateway:app", "--host", "0.0.0.0", "--port", "8100", "--no-access-log"]
+    volumes:
+      - ./rules/devtools:/app/rules_dev:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/v1/health',timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 15

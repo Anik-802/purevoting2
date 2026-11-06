@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 
@@ -287,7 +288,7 @@ os._exit(0)  # No Python finalizers or FindingStore.close().
         [sys.executable, "-c", writer, str(path), stage], env=environment,
         input=json.dumps(submitted), text=True, capture_output=True, check=True, timeout=10,
     )
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
         saved_state, raw = connection.execute("SELECT state,body FROM findings").fetchone()
         assert saved_state == stage
         assert raw == canonical(submitted)
@@ -459,7 +460,7 @@ def test_stored_body_corruption_is_detected_before_publication(tmp_path):
     path = tmp_path / "outbox.sqlite3"
     with FindingStore(path) as store:
         store.enqueue(body())
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         altered = body()
         altered["summary"] = "Tampered after durable storage."
         connection.execute("UPDATE findings SET body = ? WHERE finding_id = ?",
