@@ -9,7 +9,7 @@ import random
 
 from sqlalchemy import text
 
-from app import timeutil
+from app import tally, timeutil
 from app.db import get_engine
 from app.gateway import GatewayRefused, GatewayUnavailable, get_gateway
 from app.store import load_election, raise_alert, set_status
@@ -134,6 +134,10 @@ def apply_outcome(conn, e: dict, event: dict, res: dict, now: int) -> None:
             set_status(conn, e, "OPEN", k)
             conn.execute(text("UPDATE credential.elections SET open_event_id = NULL WHERE election_id = :e"), {"e": eid})
             e["open_event_id"] = None
+        elif type_ == "TALLY_PUBLISHED":
+            tally.on_published(conn, e, now)      # the TALLY checkpoint follows only an ACCEPTED TALLY_PUBLISHED
+        elif type_ == "ELECTION_FINALIZED":
+            tally.on_finalized(conn, e)           # permissive: FINALIZED only once ACCEPTED
         return
 
     if status == "CONFLICT":
@@ -146,6 +150,10 @@ def apply_outcome(conn, e: dict, event: dict, res: dict, now: int) -> None:
     if type_ == "ELECTION_CREATED":
         conn.execute(text("UPDATE credential.elections SET ledger_rejected = true WHERE election_id = :e"), {"e": eid})
         raise_alert(conn, eid, k, "TRANSITION_REJECTED", "core-api", now, f"{what} {code}")
+    elif type_ == "ELECTION_FINALIZED":
+        # permissive: stays TALLIED; finalize can be requested again once the cause is fixed (no checkpoint follows,
+        # so a repeated refusal is appended to the same alert instead of being dropped)
+        raise_alert(conn, eid, k, "TRANSITION_REJECTED", "core-api", now, f"{what} {code}", append=True)
     elif type_ == "ELECTION_OPENED":
         # permissive: reverted, no ballots are accepted
         conn.execute(text("UPDATE credential.elections SET open_event_id = NULL WHERE election_id = :e"), {"e": eid})

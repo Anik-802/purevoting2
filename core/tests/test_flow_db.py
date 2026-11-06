@@ -688,3 +688,227 @@ def test_outbox_comparison_second_voter_injection_after_resume(env):
     _stored(eid, "evr_" + "8" * 26, "BALLOT_RECEIVED", {"ballot_hash": "2" * 64})   # same wording, another event
     ledger_compare.compare(eid)
     assert _fifo_stopped(eid)
+
+
+def _finding(eid, rule, result, k, checkpoint_event_id, end):
+    observed = {"R1": {"accepted_duplicate_tokens": 0}, "R2": {"late_events": 0}, "R3": {"mismatches": 0},
+                "R4": {"unapproved_changes": 0}, "R5": {"tables_mismatched": 0}}[rule]
+    body = {"finding_id": ulid("fnd"), "schema_version": "1", "rule_id": rule, "rule_version": "0.1.0",
+            "election_id": eid, "result": result, "trigger": "TALLY", "checked_at": iso(end + 300), "checkpoint": k,
+            "data_as_of": {"ledger_last_seq": 1, "checkpoint_event_id": checkpoint_event_id},
+            "observed": observed, "expected": "none", "summary": f"{rule} {result}.", "evidence_refs": []}
+    if result != "PASS":
+        body["severity"] = "HIGH"
+        body["evidence_refs"] = [{"kind": "ledger_event", "ref": checkpoint_event_id}]
+    if result == "INCONCLUSIVE":
+        body["inconclusive_reason"] = "BATCH_NOT_ANCHORED"
+    return body
+
+
+def _record(body):
+    TestClient(fake_gateway.app).post("/v1/finding-records", json={
+        "election_id": body["election_id"], "finding_id": body["finding_id"], "rule_id": body["rule_id"],
+        "result": body["result"], "finding_checkpoint": body["checkpoint"], "finding_hash": hashing.Hc(body),
+        "signature": {"scheme": "eip191-secp256k1", "signer": "0x" + "c3" * 20, "value": "0x" + "00" * 65}})
+
+
+def test_tally_and_finalize(env):
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    start, end = t0 + 10 * B, t0 + 20 * B
+    r = c.post("/v1/elections", headers=auth, json={
+        "title": "Tally test", "window_start": iso(start), "window_end": iso(end),
+        "time_bucket_seconds": B, "checkpoint_interval_seconds": B,
+        "candidates": [{"name": "Kim"}, {"name": "Lee"}],
+        "org_ids": ["org_commission", "org_neutral", "org_observer"], "approval_threshold": 2})
+    eid = r.json()["election_id"]
+    voters = [{"external_ref": f"t{i:03d}", "name": f"Voter {i}"} for i in range(100)]
+    c.put(f"/v1/elections/{eid}/roster", headers=auth, json={"voters": voters})
+    clock.frozen = t0 + B
+    deliver_until_idle(eid)
+    assert c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth).status_code == 202
+    lines = c.post(f"/v1/elections/{eid}/tokens:issue", headers=auth, json={"delivery": "CSV"}).text.strip().splitlines()
+    tokens = [ln.rsplit("#t=", 1)[1] for ln in lines[1:]]
+    clock.frozen = start
+    scheduler_tick([eid])
+    deliver_until_idle(eid)
+    pub = c.get(f"/v1/public/elections/{eid}").json()
+    assert pub["status"] == "OPEN"
+    kim, lee = sorted(x["candidate_id"] for x in pub["candidates"])
+    box = nacl.public.SealedBox(nacl.public.PublicKey(base64.b64decode(pub["public_key"])))
+
+    # browser plaintext (no spaces), Python plaintext (": "), and an invalid one (not a candidate)
+    plaintexts = [json.dumps({"candidate_id": kim}, separators=(",", ":")).encode(),
+                  json.dumps({"candidate_id": lee}).encode(), json.dumps({"candidate_id": kim}).encode(),
+                  json.dumps({"candidate_id": "cand_nobody"}).encode()]
+    clock.frozen = start + 5
+    assert c.post(f"/v1/elections/{eid}/tally", headers=auth).json()["code"] == "INVALID_STATE_TRANSITION"
+    invalid_hash, sealed_hashes = None, []
+    for tok, plain in zip(tokens, plaintexts):
+        cred = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode()
+        assert c.post("/v1/credentials:redeem", json={"election_id": eid, "token": tok,
+                                                      "nullifier_hash": hashing.H(cred)}).status_code == 200
+        sealed = box.encrypt(plain)
+        assert c.post("/v1/ballots", json={"election_id": eid, "credential": cred,
+                                           "sealed_ballot": base64.b64encode(sealed).decode()}).status_code == 201
+        sealed_hashes.append(hashing.H(sealed))
+        if b"cand_nobody" in plain:
+            invalid_hash = hashing.H(sealed)
+
+    # close; tally refused until the outbox is drained
+    clock.frozen = end
+    scheduler_tick([eid])
+    r = c.post(f"/v1/elections/{eid}/tally", headers=auth)
+    assert r.status_code == 409 and r.json()["code"] == "OUTBOX_NOT_DRAINED"
+    clock.frozen = end + B
+    deliver_until_idle(eid)
+
+    # Core and the ledger disagree (stopped FIFO, CONFLICT event): no tally until a person resolves it
+    lee_event = next(r["event_id"] for r in outbox_rows(eid) if r["event"]["type"] == "BALLOT_RECEIVED"
+                     and r["event"]["payload"]["ballot_hash"] == sealed_hashes[1])
+    with db.get_engine().begin() as conn:
+        conn.execute(text("UPDATE credential.elections SET fifo_stopped = true WHERE election_id = :e"), {"e": eid})
+    assert "FIFO is stopped" in c.post(f"/v1/elections/{eid}/tally", headers=auth).json()["detail"]
+    with db.get_engine().begin() as conn:
+        conn.execute(text("UPDATE credential.elections SET fifo_stopped = false WHERE election_id = :e"), {"e": eid})
+        conn.execute(text("UPDATE credential.outbox SET status = 'CONFLICT' WHERE event_id = :v"), {"v": lee_event})
+    r = c.post(f"/v1/elections/{eid}/tally", headers=auth)
+    assert r.status_code == 409 and "CONFLICT" in r.json()["detail"]
+    # the Gateway REJECTED Lee's ballot instead: it is excluded, not counted
+    with db.get_engine().begin() as conn:
+        conn.execute(text("UPDATE credential.outbox SET status = 'REJECTED' WHERE event_id = :v"), {"v": lee_event})
+
+    r = c.post(f"/v1/elections/{eid}/tally", headers=auth)
+    assert r.status_code == 200, r.text
+    t = r.json()
+    assert t["ballot_count"] == 2 and t["invalid_ballots"] == 1 and t["excluded_ballots"] == 1
+    assert t["invalid_ballot_hashes"] == [invalid_hash]
+    assert {x["candidate_id"]: x["votes"] for x in t["results"]} == {kim: 2, lee: 0}           # 0 votes listed
+    accepted = [h for i, h in enumerate(sealed_hashes) if i != 1]
+    assert t["ballot_set_root"] == hashing.merkle_root(sorted(accepted))      # recomputed independently
+    recomputed = hashing.Hc({k: v for k, v in t.items() if k not in ("result_hash", "published_at")})
+    assert t["result_hash"] == recomputed                                                   # hashing.md result_hash
+    assert c.post(f"/v1/elections/{eid}/tally", headers=auth).json() == t                  # again: same tally
+    assert c.get(f"/v1/elections/{eid}/tally", headers=auth).json() == t
+    assert c.get(f"/v1/elections/{eid}", headers=auth).json()["status"] == "TALLIED"       # strict: at once
+
+    # TALLY checkpoint only after TALLY_PUBLISHED is ACCEPTED; the private key from it on (rule key, staff)
+    rk = {"X-Service-Key": RULE_KEY}
+    reasons = [x["reason"] for x in c.get("/internal/v1/checkpoints", params={"election_id": eid},
+                                          headers=rk).json()["items"]]
+    assert "TALLY" not in reasons
+    clock.frozen = end + 2 * B
+    deliver_until_idle(eid)
+    cps = c.get("/internal/v1/checkpoints", params={"election_id": eid}, headers=rk).json()["items"]
+    tally_cp = next(x for x in cps if x["reason"] == "TALLY")
+    assert tally_cp["ledger_status"] == "ACCEPTED"
+    cfg = c.get("/internal/v1/views/election_config", params={"election_id": eid, "checkpoint": tally_cp["checkpoint"]},
+                headers=rk).json()["rows"][0]
+    assert cfg["status"] == "TALLIED" and cfg["private_key"] is not None
+    agent = c.get("/internal/v1/views/election_config", params={"election_id": eid},
+                  headers={"X-Service-Key": "test-agent-key"})
+    assert agent.status_code == 403 or agent.json()["rows"][0]["private_key"] is None     # never to the agent
+
+    # finalize: needs R1–R5 at the TALLY checkpoint and every FAIL / INCONCLUSIVE resolved
+    r = c.post(f"/v1/elections/{eid}:finalize", headers=auth)
+    assert r.status_code == 409 and r.json()["code"] == "FINDINGS_UNREVIEWED"
+    k = tally_cp["checkpoint"]
+    early = _finding(eid, "R5", "INCONCLUSIVE", k, tally_cp["event_id"], end)                 # same checkpoint
+    bodies = [_finding(eid, rule, "PASS", k, tally_cp["event_id"], end) for rule in ("R1", "R2", "R3", "R4")]
+    for b in [early] + bodies:
+        _record(b)
+        assert c.post("/internal/v1/findings", json=b, headers=rk).status_code == 201
+    r = c.post(f"/v1/elections/{eid}:finalize", headers=auth)
+    assert r.status_code == 409 and "not resolved" in r.json()["detail"]                   # INCONCLUSIVE R5 open
+    r5 = _finding(eid, "R5", "PASS", k, tally_cp["event_id"], end)    # re-run, recorded later: supersedes `early`
+    unstored = _finding(eid, "R3", "FAIL", k, tally_cp["event_id"], end)
+    _record(r5)
+    assert c.post("/internal/v1/findings", json=r5, headers=rk).status_code == 201
+    _record(unstored)                                                                       # recorded, body not stored
+    r = c.post(f"/v1/elections/{eid}:finalize", headers=auth)
+    assert r.status_code == 409 and "without a stored body" in r.json()["detail"]
+    assert c.post("/internal/v1/findings", json=unstored, headers=rk).status_code == 201
+    r = c.post(f"/v1/elections/{eid}:finalize", headers=auth)
+    assert r.status_code == 409 and "not resolved" in r.json()["detail"]                   # the FAIL is unreviewed
+    # the contract's status decides (as exposed by the Gateway), never a status Core derives itself
+    fake_gateway.state.review_status[unstored["finding_id"]] = "CONFIRMED_ISSUE"
+    r = c.post(f"/v1/elections/{eid}:finalize", headers=auth)
+    assert r.status_code == 409 and r.json()["code"] == "AUDIT_UNRESOLVED"
+    fake_gateway.state.review_status[unstored["finding_id"]] = "RESOLVED"
+
+    r = c.post(f"/v1/elections/{eid}:finalize", headers=auth)
+    assert r.status_code == 202 and r.json()["status"] == "TALLIED"                         # permissive
+    assert r.json()["transition"]["to_status"] == "FINALIZED" and r.json()["transition"]["ledger_status"] == "PENDING"
+    assert c.post(f"/v1/elections/{eid}:finalize", headers=auth).status_code == 202        # retry: no second event
+    clock.frozen = end + 3 * B
+    deliver_until_idle(eid)
+    assert c.get(f"/v1/elections/{eid}", headers=auth).json()["status"] == "FINALIZED"
+    assert c.post(f"/v1/elections/{eid}:finalize", headers=auth).status_code == 202
+    fin = [r["event"] for r in outbox_rows(eid) if r["event"]["type"] == "ELECTION_FINALIZED"]
+    assert len(fin) == 1 and fin[0]["payload"] == {"result_hash": t["result_hash"]}
+    from app import schemas
+    for row in outbox_rows(eid):
+        assert schemas.errors("ledger-events.schema.json", "LedgerEventSubmission", row["event"]) == [], row["event"]
+
+
+def test_tally_invalid_rows_and_rejected_publish(env):
+    """Rows that do not match their ledger event are invalid (alert without hashes); a REJECTED
+    TALLY_PUBLISHED keeps TALLIED (strict) but commits no TALLY checkpoint, so the key is never revealed."""
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    start, end = t0 + 10 * B, t0 + 20 * B
+    eid = c.post("/v1/elections", headers=auth, json={
+        "title": "Tally failure paths", "window_start": iso(start), "window_end": iso(end),
+        "time_bucket_seconds": B, "checkpoint_interval_seconds": B, "candidates": [{"name": "Kim"}, {"name": "Lee"}],
+        "org_ids": ["org_commission", "org_neutral", "org_observer"], "approval_threshold": 2}).json()["election_id"]
+    c.put(f"/v1/elections/{eid}/roster", headers=auth,
+          json={"voters": [{"external_ref": f"f{i:03d}", "name": f"V{i}"} for i in range(100)]})
+    clock.frozen = t0 + B
+    deliver_until_idle(eid)
+    c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth)
+    lines = c.post(f"/v1/elections/{eid}/tokens:issue", headers=auth, json={"delivery": "CSV"}).text.strip().splitlines()
+    clock.frozen = start
+    scheduler_tick([eid])
+    deliver_until_idle(eid)
+    pub = c.get(f"/v1/public/elections/{eid}").json()
+    kim = sorted(x["candidate_id"] for x in pub["candidates"])[0]
+    box = nacl.public.SealedBox(nacl.public.PublicKey(base64.b64decode(pub["public_key"])))
+    clock.frozen = start + 5
+    hashes = []
+    for ln in lines[1:4]:
+        cred = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode()
+        c.post("/v1/credentials:redeem", json={"election_id": eid, "token": ln.rsplit("#t=", 1)[1],
+                                               "nullifier_hash": hashing.H(cred)})
+        sealed = box.encrypt(json.dumps({"candidate_id": kim}).encode())
+        hashes.append(hashing.H(sealed))
+        assert c.post("/v1/ballots", json={"election_id": eid, "credential": cred,
+                                           "sealed_ballot": base64.b64encode(sealed).decode()}).status_code == 201
+    clock.frozen = end
+    scheduler_tick([eid])
+    clock.frozen = end + B
+    deliver_until_idle(eid)
+
+    # rows that no longer match their accepted ledger event (Core's role cannot UPDATE ballot rows, so the stored
+    # event copy is edited instead: receipt_hash of one, nullifier_hash of another)
+    with db.get_engine().begin() as conn:
+        for h, field in ((hashes[0], "receipt_hash"), (hashes[1], "nullifier_hash")):
+            conn.execute(text("UPDATE credential.outbox SET event = jsonb_set(event, ARRAY['payload', CAST(:f AS text)], to_jsonb(CAST(:z AS text))) "
+                              "WHERE election_id = :e AND event->'payload'->>'ballot_hash' = :h"),
+                         {"f": field, "z": "0" * 64, "e": eid, "h": h})
+    fake_gateway.state.reject_types.add("TALLY_PUBLISHED")
+    t = c.post(f"/v1/elections/{eid}/tally", headers=auth).json()
+    assert t["ballot_count"] == 1 and t["invalid_ballots"] == 2
+    assert t["invalid_ballot_hashes"] == sorted(hashes[:2])
+    rk = {"X-Service-Key": RULE_KEY}
+    alerts = c.get(f"/v1/elections/{eid}/audit-alerts", headers=auth).json()["items"]
+    excluded = [a for a in alerts if a["kind"] == "BALLOT_EXCLUDED"]
+    assert excluded and not any(h in excluded[0]["detail"] for h in hashes)                 # no hashes in alerts
+
+    clock.frozen = end + 2 * B
+    deliver_until_idle(eid)
+    assert c.get(f"/v1/elections/{eid}", headers=auth).json()["status"] == "TALLIED"        # strict: kept
+    cps = c.get("/internal/v1/checkpoints", params={"election_id": eid}, headers=rk).json()["items"]
+    assert all(x["reason"] != "TALLY" for x in cps)                                        # no TALLY checkpoint
+    cfg = c.get("/internal/v1/views/election_config", params={"election_id": eid}, headers=rk).json()["rows"][0]
+    assert cfg["private_key"] is None                                                      # key never revealed
+    alerts = c.get(f"/v1/elections/{eid}/audit-alerts", headers=auth).json()["items"]
+    assert any(a["kind"] == "TRANSITION_REJECTED" for a in alerts)
+    assert c.post(f"/v1/elections/{eid}:finalize", headers=auth).json()["code"] == "INVALID_STATE_TRANSITION"

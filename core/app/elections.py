@@ -238,13 +238,18 @@ def issue_tokens(conn, e: dict, now: int) -> tuple[list[dict], int]:
     return rows, batch_no
 
 
+def _cell(value: str) -> str:
+    # roster names come from an uploaded file: never let a spreadsheet run them as formulas
+    return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
+
+
 def to_csv(rows: list[dict]) -> str:
     if not rows:
         return ""
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=["external_ref", "name", "link"], lineterminator="\n")
     w.writeheader()
-    w.writerows(rows)
+    w.writerows({k: _cell(v) for k, v in r.items()} for r in rows)
     return buf.getvalue()
 
 

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Header
 from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import text
 
-from app import elections, findings, schemas, timeutil
+from app import elections, findings, schemas, tally, timeutil
 from app.auth import Staff, require_staff
 from app.errors import Problem
 from app.models import ElectionCreate, IssueIn, RosterIn
@@ -102,6 +102,28 @@ def issue_tokens(election_id: str, body: IssueIn, staff: Staff = Depends(ADMIN),
             elections.issue_cache.put(election_id, idempotency_key, csv_text)
         return csv_text
     return PlainTextResponse(run_election(election_id, go), media_type="text/csv")
+
+
+@router.post("/v1/elections/{election_id}/tally")
+def run_tally(election_id: str, staff: Staff = Depends(ADMIN)):
+    def go(conn, e, now):
+        elections.require_operator_admin(staff, e)
+        return tally.run_tally(conn, e, staff, now)
+    return run_election(election_id, go)
+
+
+@router.get("/v1/elections/{election_id}/tally")
+def get_tally(election_id: str, staff: Staff = Depends(ANY_STAFF)):
+    return run(lambda c: tally.get(c, load_election(c, election_id)))
+
+
+@router.post("/v1/elections/{election_id}:finalize", status_code=202)
+def finalize(election_id: str, staff: Staff = Depends(ADMIN)):
+    def go(conn, e, now):
+        elections.require_operator_admin(staff, e)
+        tally.finalize(conn, e, staff, now)
+        return elections.to_staff(conn, e)
+    return run_election(election_id, go)
 
 
 @router.get("/v1/elections/{election_id}/views/{view}", tags=["audit"])

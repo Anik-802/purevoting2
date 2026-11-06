@@ -66,23 +66,37 @@ class GatewayClient:
             raise Problem(503, "LEDGER_UNAVAILABLE", "organization registry not readable")
         return r.json()["items"]
 
-    def finding_record(self, election_id: str, finding_id: str) -> dict | None:
-        """The FINDING_RECORDED event of finding_id, or None if the Gateway has not indexed it (yet)."""
-        cursor = None
+    def finding_records(self, election_id: str) -> list[dict]:
+        """Every finding record of the election with its contract_status (all pages, at most MAX_EVENT_PAGES); a
+        record without finding_id, rule, checkpoint or contract_status makes the listing unusable."""
+        items, cursor, cursors = [], None, set()
         while True:
+            if len(cursors) >= MAX_EVENT_PAGES or cursor in cursors:
+                raise GatewayUnavailable("GET /v1/finding-records: too many pages or a repeated cursor")
+            cursors.add(cursor)
             params = {"election_id": election_id, "limit": 1000}
             if cursor:
                 params["cursor"] = cursor
             r = self._get("/v1/finding-records", **params)
             if r.status_code != 200:
-                raise GatewayUnavailable(f"HTTP {r.status_code}")
-            page = r.json()
-            for item in page["items"]:
-                if item["finding_id"] == finding_id:
-                    return item
-            cursor = page.get("next_cursor")
+                raise GatewayUnavailable(f"GET /v1/finding-records: HTTP {r.status_code}")
+            try:
+                page = r.json()
+                for item in page["items"]:
+                    p = item["recorded"]["payload"]
+                    if not (isinstance(item["finding_id"], str) and isinstance(item["contract_status"], str)
+                            and isinstance(p["rule_id"], str) and isinstance(p["finding_checkpoint"], int)):
+                        raise TypeError
+                items += page["items"]
+                cursor = page.get("next_cursor")
+            except Exception:   # noqa: BLE001 — anything unparsable is unavailable, never a 500
+                raise GatewayUnavailable("GET /v1/finding-records: malformed page") from None
             if not cursor:
-                return None
+                return items
+
+    def finding_record(self, election_id: str, finding_id: str) -> dict | None:
+        """The FINDING_RECORDED event of finding_id, or None if the Gateway has not indexed it (yet)."""
+        return next((item for item in self.finding_records(election_id) if item["finding_id"] == finding_id), None)
 
     def events(self, election_id: str) -> list[dict]:
         """GET /v1/events: every stored event of the election (all pages, at most MAX_EVENT_PAGES)."""

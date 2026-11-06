@@ -45,6 +45,13 @@ def test_link_csv_has_the_contract_columns():
     assert elections.to_csv([]) == ""
 
 
+def test_link_csv_neutralises_formulas():
+    text = elections.to_csv([{"external_ref": "=1+2", "name": "@SUM(A1)", "link": "http://x/vote/elc_1#t=abc"}])
+    assert text.splitlines()[1] == "'=1+2,'@SUM(A1),http://x/vote/elc_1#t=abc"
+    tab = elections.to_csv([{"external_ref": "\t=1", "name": "Kim", "link": "http://x"}])
+    assert tab.splitlines()[1].startswith("'\t=1,")
+
+
 def test_retry_later_schedule():
     """RETRY_LATER: every 1 s for the first 30 s, then exponential up to 60 s (contracts v1.1)."""
     from app import outbox
@@ -171,3 +178,18 @@ def test_gateway_events_reads_every_page():
     with pytest.raises(GatewayUnavailable):
         GatewayClient(http=endless).events("elc_1")
     assert len(endless.cursors) == 1000
+
+
+def test_tally_plaintext_is_compared_after_parsing():
+    from app.tally import valid_choice
+    ids = {"cand_A", "cand_B"}
+    assert valid_choice(b'{"candidate_id":"cand_A"}', ids) == "cand_A"          # browser (JSON.stringify)
+    assert valid_choice(b'{"candidate_id": "cand_B"}', ids) == "cand_B"         # Python json.dumps default
+    assert valid_choice(b' {\n "candidate_id" : "cand_A" } ', ids) == "cand_A"
+    assert valid_choice(b'{"candidate_id":"cand_X"}', ids) is None              # not a candidate
+    assert valid_choice(b'{"candidate_id":"cand_A","x":1}', ids) is None        # extra key
+    assert valid_choice(b'{"candidate_id":"cand_A","candidate_id":"cand_B"}', ids) is None   # duplicated key
+    assert valid_choice(b'{"candidate_id":1}', ids) is None
+    assert valid_choice(b'["cand_A"]', ids) is None
+    assert valid_choice(b'\xff\xfe', ids) is None
+    assert valid_choice(b'{"candidate_id":"cand_A"', ids) is None

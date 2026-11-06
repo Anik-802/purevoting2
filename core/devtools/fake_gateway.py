@@ -31,6 +31,7 @@ class State:
         self.block = 100
         self.reject_types: set[str] = set()     # tests: force REJECTED for these event types
         self.records: dict[str, dict] = {}      # finding_id -> FINDING_RECORDED event
+        self.review_status: dict[str, str] = {}  # tests: contract_status set by (not yet relayed) signed reviews
         self.received: list[dict] = []          # every submission, in arrival order (tests check delivery order)
         self.fail_status: int | None = None     # tests: answer POST /v1/events with this HTTP status
         # pinned chain configuration it reports, and the node stand-in (/rpc)
@@ -140,11 +141,28 @@ async def record_finding(request: Request):
     return {"event_id": event_id}
 
 
+def _contract_status(fid: str, ev: dict, later: list[dict]) -> str:
+    """The contract's findingRecord status (README "Review and supersession"); reviews are not relayed yet, so tests
+    set RESOLVED / CONFIRMED_ISSUE through state.review_status. An INCONCLUSIVE record is SUPERSEDED by a PASS of the
+    same rule recorded later at the same or a higher checkpoint."""
+    if fid in state.review_status:
+        return state.review_status[fid]
+    p = ev["payload"]
+    if p["result"] == "PASS":
+        return "NOT_REQUIRED"
+    if p["result"] == "INCONCLUSIVE" and any(
+            o["payload"]["rule_id"] == p["rule_id"] and o["payload"]["result"] == "PASS"
+            and o["payload"]["finding_checkpoint"] >= p["finding_checkpoint"] for o in later):
+        return "SUPERSEDED"
+    return "PENDING"
+
+
 @app.get("/v1/finding-records")
 def finding_records(election_id: str, limit: int = 100, cursor: str | None = None):
+    mine = [(fid, ev) for fid, ev in state.records.items() if ev["election_id"] == election_id]   # recording order
     items = [{"finding_id": fid, "recorded": ev, "reviews": [],
-              "contract_status": "NOT_REQUIRED" if ev["payload"]["result"] == "PASS" else "PENDING"}
-             for fid, ev in state.records.items() if ev["election_id"] == election_id]
+              "contract_status": _contract_status(fid, ev, [o for _, o in mine[i + 1:]])}
+             for i, (fid, ev) in enumerate(mine)]
     return {"items": items, "next_cursor": None}
 
 
