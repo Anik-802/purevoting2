@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # ELECTION_CREATED values). Default node, so stub is on only when chosen explicitly.
     creation_check_mode: str = "node"
     # base of the one-time links: <voter_web_url>/vote/<election_id>#t=<token>
-    voter_web_url: str = "http://127.0.0.1:5173"
+    voter_web_url: str = "http://127.0.0.1:3000"
     # background loops (scheduler, outbox worker); tests drive them by hand
     run_workers: bool = True
 

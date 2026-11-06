@@ -14,3 +14,5 @@ ledger/**/chaindata/
 
 # T01 run records (tests/scenarios/T01/setup.py --out)
 t01-runs/
+web/dist/
+*.tsbuildinfo

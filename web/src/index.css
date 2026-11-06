@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* Design tokens: Toss-style blue / grey scale for the voter web, KRDS-like navy for the admin header (docs: web/README.md) */
+@theme {
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, "Segoe UI", sans-serif;
+
+  --color-primary: #3182f6;
+  --color-primary-hover: #1b64da;
+  --color-primary-soft: #e8f3ff;
+
+  --color-ink: #191f28;
+  --color-ink-2: #333d4b;
+  --color-ink-3: #4e5968;
+  --color-ink-4: #8b95a1;
+  --color-line: #e5e8eb;
+  --color-surface: #f2f4f6;
+
+  --color-ok: #03b26c;
+  --color-ok-soft: #e5f8ef;
+  --color-danger: #f04452;
+  --color-danger-soft: #feeced;
+  --color-warn: #ff9f00;
+  --color-warn-soft: #fff4e0;
+
+  --color-navy: #1f2a44;
+  --color-navy-2: #303646;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+
+.mono {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}

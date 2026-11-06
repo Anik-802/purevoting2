@@ -1,4 +1,4 @@
-# 결정 사항 목록 (v1.1, 한국어 원본)
+# 결정 사항 목록 (v1.3, 한국어 원본)
 
 > 영어판 `decisions.md`가 기준입니다(D-19). 이 파일은 한국어 원본으로, 감독관 검토 이력을 포함합니다.
 > 2026-10-18 v1.0: 감독관 검토(DECISIONS VERDICT: READY TO CONFIRM)를 거쳐 D-02·D-15를 뺀 모든 항목을 **추천안으로 확정**했습니다. 확정하면서 보완한 문구는 각 항목의 `확정 보완(v1.0)`에 있습니다. D-02는 Harits, D-15는 Anik에게 위임했습니다.
@@ -25,6 +25,7 @@
 > v1.1 (2026-11-02): Harits의 질문에 대한 답을 감독관 검토 2회를 거쳐 확정. D-02 확정(PureChain), D-03 노드 수 확정, D-27(확정 깊이) 추가. *잠정*으로 표시한 값은 Harits의 측정(기한 2026-11-09) 뒤 확정. 계약도 v1.1로 수정(`contracts/CHANGELOG.md`)
 > v1.2 (2026-11-04): D-28(일정 압축: 데모 2026-11-19, 최종 2026-12-04, `docs/schedule.md`) 추가. 감독관 일정 검토 3회(PASS). D-27 측정 기한은 2026-11-13으로 연기. D-15 확정: 유료 AI 금지(로컬 무료 모델, 안 되면 템플릿 보고서)
 > v1.2.1 (2026-11-05): D-15·D-28 — AI 감사 에이전트를 M2 데모에 포함(템플릿 11-12, 진행/중단 11-13, 통합 11-17). 웹 화면은 M2에서 전부 시연 가능(승인·검토 화면은 M3 전까지 가짜 Gateway). M4, T14(다른 PC 시험), 12-04 삭제. 모든 작업은 11-30까지. 감독관 검토 반영
+> v1.3 (2026-11-06): D-29(공개 접속: 데모 PC에서 Tailscale Funnel, compose `web` 서비스가 유일한 공개 입구) 추가. 배포 방식 감독관 검토 반영
 
 ## 요약
 
@@ -58,6 +59,7 @@
 | D-26 | Gateway 운영 주체 | 중립 기관 운영. 운영자는 전달을 늦출 수 있지만 서명된 승인·검토·finding은 위조할 수 없고, 서명자는 체인에 직접 제출 가능 | Harits | 확정 |
 | D-27 | 확정 깊이 | 블록 위에 D개 이상 쌓인 블록의 체인 정보만 인정(D = 2, *잠정*). 계약 주소처럼 배포 설정에 고정 | Harits, 승민, Anik | 확정(v1.1) |
 | D-28 | 일정 압축 | 데모 버전 2026-11-19, 모든 작업은 2026-11-30까지. 단계 M1–M3, 담당별 날짜, 넘겨주는 항목, 대체안은 `docs/schedule.md`. 선택 기능은 만들지 않음, 실험 축소, 필수 범위는 그대로 | 전원 | 확정(v1.2) |
+| D-29 | 공개 접속 | 스택은 데모 PC에서 실행. compose `web` 서비스(nginx: 빌드된 웹 + Core `/v1/`만)가 유일한 입구이고, 무료 **Tailscale Funnel**로 HTTPS 공개(팀 시험은 Tailscale Serve). 클라우드 호스팅 안 함 | 승민 | 확정(v1.3) |
 
 ---
 
@@ -277,3 +279,18 @@
   - D-27 측정 기한은 11-09에서 11-13으로. 그때까지 D = 2
   - 단계 판정은 PASS / CONDITIONAL / FAIL. 작업은 병행하고 P1은 다음 실행 전까지 고침. 대체안(`docs/schedule.md` 4절)은 지금 정해 두고 필요할 때 여기에 한 줄로 발동
 - **영향**: `docs/schedule.md`, `docs/system-design.md`(7절, 9절, 위험), `docs/roles/*`(마일스톤), `docs/test-plan.md`(실험 절차), `tests/scenarios/README.md`(라벨 기한)
+
+### D-29. 공개 접속 (v1.3 신규)
+- **배경**: 스택 전체가 데모 PC에서 모든 포트를 127.0.0.1에 묶고 돌아서, 다른 기기에서는 투표자·관리자 웹을 열 수 없었음. 다른 기기·다른 네트워크에서 비용 0으로 접속할 수 있어야 함
+- **결정**
+  - 스택은 데모 PC(승민) 한 대에서 계속 실행. 클라우드 호스팅 안 함
+  - **공개 입구는 하나**: compose `web` 서비스(`web/Dockerfile`, `web/nginx.conf`)가 빌드된 웹을 서빙하고 Core의 `/v1/`만 같은 주소로 전달(CORS 불필요). `/internal/v1/*`, API 문서, 상태 확인 경로는 404이고, `..`나 인코딩된 `.`·`/`·`\`가 든 경로는 400으로 거부해서 Core로 넘어가는 원본 URI는 항상 `/v1/`로 시작함. 그 밖에는 터널로 아무것도 닿지 않음(DB·Core·Gateway 포트는 127.0.0.1에만 열림). `127.0.0.1:${WEB_PORT}`(3000)에 바인딩. 입구는 요청 로그를 남기지 않음(정확한 시각과 영수증 경로가 구간 묶음을 무력화함, threat-model S1). 웹 페이지에 CSP 적용
+  - **입구에서 요청 수 제한**: 터널은 모든 요청을 같은 로컬 주소에서 넘겨주므로 사이트 전체 기준: 로그인 분당 30회, redeem·투표 제출·선거 조회 초당 20회, 영수증 조회는 별도 구역 초당 30회라 폴링이 제출을 막지 않음(투표자 웹은 5초마다, 최대 15초까지 늘려 가며 폴링). 거부된 요청은 계약의 `429 RATE_LIMITED` problem 본문과 `Retry-After`를 받고 Core에 닿지 않았으므로 재시도해도 안전. Core 자체의 클라이언트별 `RATE_LIMITED`는 미구현이며 보고서에 한계로 적음. 외부의 반복 로그인 시도가 로컬 직원 로그인까지 막을 수 있음(대응: Funnel 끄기)
+  - **공개 방법**: 데모 PC에서 `tailscale funnel`을 켜면 고정 주소 `https://<기기>.<tailnet>.ts.net`이 생김(무료 Personal 플랜. Funnel은 베타, 포트 443·8443·10000, 대역폭 한도 비공개). HTTPS라서 투표자 웹의 WebCrypto가 동작하고, TLS는 데모 PC에서 풀림. 팀 시험은 Tailscale Serve(tailnet 구성원만). Funnel은 필요할 때만 켜고 끝나면 `tailscale funnel reset`
+  - **링크**: `VOTER_WEB_URL`은 Funnel 주소. 순서는 Funnel 켜기 → `VOTER_WEB_URL` 설정 → Core 시작 → 링크 발급. 선거가 열려 있는 동안 주소가 바뀌면 안 됨(기기 이름을 바꾸면 바뀜)
+  - 공개 주소에서는 데모 키와 가짜 명부만 사용(배포마다 새 키, hashing.md)
+  - **M2**: 데모의 주 경로는 데모 PC 로컬 그대로(오프라인 실행, 이미지는 미리 빌드), `VOTER_WEB_URL=http://127.0.0.1:3000`. Funnel 주소는 시연 장소 네트워크에서 될 때만 보여 주고(휴대폰 핫스팟 대비) M2 조건이 아님. 링크의 호스트는 손으로 바꿔도 동작함(토큰은 fragment, API는 같은 주소)
+  - **채택하지 않음**: GitHub Pages(정적 파일만, API는 결국 터널 필요, CORS·SPA 경로 문제), 무료 클라우드 VM(Oracle Always Free A1 2 OCPU·12 GB ARM, 유휴 시 회수, 노드 이미지 아키텍처 미확인), Render·Railway·Fly(슬립, DB 만료, 다중 노드 체인 불가), LAN IP http 접속(secure context 아님, 클라이언트 격리), Cloudflare Quick Tunnel은 대체용만(실행마다 주소 변경, TLS가 Cloudflare에서 풀림), ngrok 무료(브라우저 접속마다 경고 페이지)
+  - 다른 PC에서 스택을 실행하는 것은 범위 밖(T14 삭제 유지, D-28). 설치한 Tailscale 버전을 기록(Funnel 회귀 사례 있음, 예: tailscale#20739). Funnel이 안 되면 다른 버전을 시도
+  - 일정이 밀리면 11-23 Funnel 시험을 가장 먼저 뺌(`docs/schedule.md` 4절)
+- **영향**: `docker-compose.yml`, `web/Dockerfile`, `web/nginx.conf`, `.env.example`, `core/app/config.py`(링크 기본 주소), `docs/schedule.md`, `docs/threat-model.md`(P1), `README.md`

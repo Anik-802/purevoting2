@@ -1,4 +1,4 @@
-# Design decisions (v1.2)
+# Design decisions (v1.3)
 
 > 2026-10-18 v1.0: after a supervisor review (DECISIONS VERDICT: READY TO CONFIRM) every item except D-02 and D-15 is
 > **confirmed as recommended**. Wording added at confirmation is marked **Confirmed note (v1.0)**. D-02 is delegated to
@@ -16,6 +16,8 @@
 > 2026-11-05 v1.2.1: D-15 / D-28 — the AI Audit Agent is part of the M2 demo (template 11-12, go / no-go 11-13,
 > integrated 11-17); every web screen demonstrable at M2 (approval / review screens on the fake Gateway until M3),
 > after supervisor reviews. M4, T14 (fresh-PC test) and the 12-04 date removed; everything finished by 11-30.
+> 2026-11-06 v1.3: new D-29 (public access through a Tailscale Funnel from the demo PC; the compose `web` service is the
+> only public entry), after a supervisor review of the deployment options.
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -51,6 +53,7 @@
 | D-26 | Gateway operator | Neutral org. It can delay relaying but cannot forge signed approvals, reviews or findings; signers can submit directly on chain | Harits | Confirmed |
 | D-27 | Confirmation depth | A chain item counts only in a block with ≥ D blocks on top (D = 2, *provisional*); pinned like the contract address | Harits, Seungmin, Anik | Confirmed (v1.1) |
 | D-28 | Schedule compression | Demo version 2026-11-19, everything finished by 2026-11-30; milestones M1–M3, per-owner dates, handoffs and fallbacks in `docs/schedule.md`; optional features not built; experiment reduced; mandatory scope unchanged | All | Confirmed (v1.2) |
+| D-29 | Public access | Stack stays on the demo PC; the compose `web` service (nginx: built web + Core `/v1/` only) is the only entry, published over HTTPS by a free **Tailscale Funnel** (team tests: Tailscale Serve); no cloud hosting | Seungmin | Confirmed (v1.3) |
 
 ---
 
@@ -375,3 +378,42 @@
     run. Fallbacks (`docs/schedule.md` section 4) are fixed now and switched on by one line here when needed.
 - **Affects:** `docs/schedule.md`, `docs/system-design.md` (sections 7, 9, risks), `docs/roles/*` (milestones),
   `docs/test-plan.md` (experiment protocol), `tests/scenarios/README.md` (label deadlines)
+
+### D-29. Public access (v1.3)
+- **Background:** the whole stack ran on the demo PC with every port bound to 127.0.0.1, so no other device could open
+  the voter or admin web. The team wants both reachable from other devices and networks at zero cost.
+- **Decision**
+  - The stack keeps running on one host, the demo PC (Seungmin's); no cloud hosting.
+  - **One public entry:** the compose `web` service (`web/Dockerfile`, `web/nginx.conf`) serves the built web and proxies
+    only Core's `/v1/` on the same origin (no CORS). `/internal/v1/*`, the API docs and the health endpoints return 404,
+    and request paths containing `..` or encoded `.` / `/` / `\` are refused (400), so the raw URI forwarded to Core
+    always starts with `/v1/`. Nothing else is reachable through the tunnel (the database, Core and Gateway ports stay
+    bound to 127.0.0.1). Bound to `127.0.0.1:${WEB_PORT}` (3000). No request log at the entry (exact times and receipt
+    paths would undo the bucketing, threat-model S1); a content security policy on the web pages.
+  - **Rate caps at the entry:** the tunnel hands every request over from one local address, so the caps are for the
+    whole site: login 30 / min; redeem, ballot and election reads 20 / s; receipt checks 30 / s in their own zone so
+    polling never starves submissions (the voter web polls every 5 s, backing off to 15 s). A refused request gets the
+    contract's `429 RATE_LIMITED` problem body with `Retry-After` and never reached Core, so retrying is safe. Core's own
+    per-client `RATE_LIMITED` is not implemented, a limit stated in the report; repeated outside login attempts can lock
+    out local staff too (remedy: turn the Funnel off).
+  - **Publishing:** `tailscale funnel` on the demo PC gives a fixed `https://<host>.<tailnet>.ts.net` address (free
+    Personal plan; Funnel is beta, ports 443 / 8443 / 10000, unpublished bandwidth limit). HTTPS gives the voter web the
+    secure context WebCrypto needs, and TLS ends on the demo PC. Team tests use Tailscale Serve (tailnet members only).
+    Funnel is on only while needed (`tailscale funnel reset` afterwards).
+  - **Links:** `VOTER_WEB_URL` is the Funnel address. Order: Funnel on → `VOTER_WEB_URL` set → Core started → links
+    issued; the address must not change while an election is open (renaming the host changes it).
+  - The public address uses demo keys and a fake roster only (fresh keys per deployment, hashing.md).
+  - **M2:** the demo's main path stays local on the demo PC (it runs offline, images built beforehand) with
+    `VOTER_WEB_URL=http://127.0.0.1:3000`; the Funnel address is shown only if it works on the venue network (phone
+    hotspot as backup) and is not a condition of M2. A link's host can be swapped by hand (the token is in the fragment
+    and the API is on the same origin).
+  - **Not chosen:** GitHub Pages (static files only; the API would still need a tunnel, plus CORS and SPA deep links);
+    free cloud VMs (Oracle Always Free A1: 2 OCPU / 12 GB ARM, reclaimed when idle, node image architecture unknown);
+    Render / Railway / Fly (sleeping services, expiring databases, no multi-node chain); the LAN IP over http (no secure
+    context, blocked by client isolation); Cloudflare Quick Tunnel only as a fallback (new address every run, TLS ends at
+    Cloudflare); ngrok free (warning page in front of every browser visit).
+  - Running the stack on other PCs is not covered (T14 stays removed, D-28). The installed Tailscale version is recorded
+    (Funnel regressions have occurred, e.g. tailscale#20739); if Funnel fails, another version is tried.
+  - If the schedule slips, the 11-23 Funnel test is the first thing dropped (`docs/schedule.md` section 4).
+- **Affects:** `docker-compose.yml`, `web/Dockerfile`, `web/nginx.conf`, `.env.example`, `core/app/config.py` (default
+  link base), `docs/schedule.md`, `docs/threat-model.md` (P1), `README.md`

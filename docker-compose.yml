@@ -39,7 +39,7 @@ services:
       PINNED_NODE_URL: ${PINNED_NODE_URL:-}
       CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}   # D-27; Gateway and Rule Engine blocks pass it too
       CREATION_CHECK_MODE: ${CREATION_CHECK_MODE:-node}   # reads the pinned node; "stub" (dev only) assumes it matches
-      VOTER_WEB_URL: ${VOTER_WEB_URL:-http://127.0.0.1:5173}
+      VOTER_WEB_URL: ${VOTER_WEB_URL:-http://127.0.0.1:3000}   # the Funnel address when published (D-29)
     depends_on:
       db:
         condition: service_healthy
@@ -50,6 +50,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # Voter / admin web and the only public entry (D-29): nginx serves the built web and Core's /v1/ on one origin and
+  # blocks /internal/v1/* and the API docs. Bound to 127.0.0.1; a Tailscale Funnel on this host publishes it over HTTPS.
+  web:
+    build:
+      context: ./web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   # Stand-in Gateway for Core development before week 3 (no chain, no signature checks): docker compose --profile mock up
   # Kept in the mock profile until 11-24 (part B of the M2 demo runs on it); Harits's real ledger-gateway comes in only

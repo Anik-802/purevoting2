@@ -71,15 +71,17 @@ new date (section 4).
 | By | Work |
 |---|---|
 | **Thu 11-05** | **D-28 PR** (this page, decisions, test-plan scope line, system-design 9 / roles 8 pointers, D-27 deadline) |
+| Fri 11-06 | Public entry (D-29): compose `web` service (nginx: built web + Core `/v1/`, internal paths blocked, rate caps), `WEB_PORT` 3000 as the link base; Tailscale installed on the demo PC, Serve tried from a second device |
 | Mon 11-09 | Tally (one ballot per accepted BALLOT_RECEIVED, key reveal at TALLY, `result_hash`, `ballot_set_root`), finalize (applied after ACCEPTED); compose blocks merged as they arrive, staff setup after registry setup |
 | **Tue 11-10** | Web base: Vite + TypeScript, JS hashing (RFC 8785, SHA-256) with the shared vectors in CI, libsodium sealed box |
 | Wed 11-11 | **M1 run** (integrator) and supervisor review |
 | **Fri 11-13** | Voter web (token from the fragment, credential and sealed ballot in the browser, receipt and its check); T05 (DB edit) and T08 (a)(b) scripts |
 | Sat 11-14 – Mon 11-16 | Part B against the fake Gateway, in this order: **(a)** E3 seed script (signed findings to the fake and to Core: one FAIL plus R1–R5 at TALLY, since the mock stack has no Rule Engine) and ROSTER_AMEND end to end in Core (create → submit → decisions → execute, re-check at execution); **(b)** review relay; **(c)** ELECTION_VOID. The fake Gateway gains proposals, decisions (EIP-191 signature check with the contract's digest, off chain; `eth-account` added to the Core image's dev requirements), finding reviews, `publishTally` / `finalizeElection` and the finalize quorum. Fake behaviour comes from `contracts/ledger-gateway.openapi.yaml` v1.1, never from what the UI happens to need, so the switch to Harits's Gateway changes no Core code |
 | **Tue 11-17** | **Admin web, every screen:** login, create, roster, freeze, link CSV, dashboard (status, counters, alerts, findings), tally, finalize, **approval screen** (recomputes `target_hash` and digest, EIP-191 signing) and **review screen** |
-| Wed 11-18 | **M2 rehearsal:** part A (real stack: E1, E2) and part B (mock stack: E3, approvals and reviews); morning run on a clean DB, afternoon supervisor review, evening fixes; demo script with timetable (including where the audit report is shown); T15 injection memo to Harits |
+| Wed 11-18 | **M2 rehearsal:** part A (real stack: E1, E2) and part B (mock stack: E3, approvals and reviews); morning run on a clean DB, afternoon supervisor review, evening fixes; demo script with timetable (including where the audit report is shown); images of both demo projects built beforehand and the start rehearsed offline (`up --no-build`); the Funnel address tried on the venue network (on at least 10 minutes early, shown on 11-19 only if it works, D-29); T15 injection memo to Harits |
 | Thu 11-19 | **M2 demo** |
 | Fri 11-20 | T15 script (first, so its results can be checked against Harits's label; the label is committed before the script's first run) |
+| Mon 11-23 | Funnel test (D-29): a device on another network votes end to end through the Funnel address; link order (Funnel → `VOTER_WEB_URL` → Core → links) written in the README |
 | **Tue 11-24** | Admin actions and reviews moved from the fake Gateway to the real one (Harits's proposals 11-23; reviews follow on 11-25), differences from the fake fixed on both sides |
 | Wed 11-25 | `evidence_check`, outbox resume; T02, T04, T05 (API variant), T08 (c) scripts (the team lead may hand part of the scripts to Harits or Anik) |
 | Thu 11-26 | **M3 run** and supervisor review |
@@ -112,6 +114,8 @@ new date (section 4).
   the report generator moves to 11-24.
 - Part B (approval / review screens) not working on 11-18: E3 shows what was finished in the order (a) → (b) → (c), at least ROSTER_AMEND, or the screens run their
   steps with the decisions sent by a script; part A is never delayed for part B.
+- Seungmin's Funnel test (11-23, D-29) is dropped first if part B or the Gateway switch (11-24) is late; the demo
+  stays local.
 - Seungmin may take over integration glue (compose, Dockerfiles, scripts) from either owner, never contract, Gateway or
   rule logic.
 
