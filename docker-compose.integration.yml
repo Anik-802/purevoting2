@@ -48,13 +48,37 @@ services:
   #   command: [...]   # set it, or the fake's uvicorn command from docker-compose.yml is inherited
   #   ...
 
-  # OWNER Anik (rules/): rule-engine service run by org_observer (D-25 v1.1). The current rules/Dockerfile runs the
-  # offline simulation only; the service block needs a healthcheck, RULE_KEY, RULE_ENGINE_SIGNER_KEY, CORE_URL,
-  # GATEWAY_URL, PINNED_NODE_URL and CONFIRMATION_DEPTH, and depends on core and ledger-gateway being healthy.
-  #
-  # rule-engine:
-  #   build: { context: rules }
-  #   ...
+  # Anik: integration only. Part B's base --profile mock stack does not start a Rule Engine.
+  rule-engine:
+    build: { context: rules }
+    entrypoint: ["python", "-m", "purevoting_rules.live_worker"]
+    command: []
+    environment:
+      CORE_URL: http://core:8000
+      GATEWAY_URL: http://ledger-gateway:8100
+      RULE_KEY: ${RULE_KEY:?set RULE_KEY}
+      RULE_ENGINE_SIGNER_KEY: ${RULE_ENGINE_SIGNER_KEY:?set RULE_ENGINE_SIGNER_KEY}
+      CHAIN_ID: ${CHAIN_ID:?set CHAIN_ID}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:?set CONTRACT_ADDRESS}
+      PINNED_NODE_URL: ${PINNED_NODE_URL:?set PINNED_NODE_URL}
+      CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}
+      RULE_POLL_SECONDS: ${RULE_POLL_SECONDS:-60}
+      ANCHOR_BATCH_SECONDS: ${ANCHOR_BATCH_SECONDS:-60}
+      RULE_STATE_DIR: /var/lib/purevoting/rules
+      PUREVOTING_REFERENCE_ROOT: /reference
+    volumes:
+      - rules-state:/var/lib/purevoting/rules
+      - ./contracts:/reference/contracts:ro
+    depends_on:
+      core: { condition: service_healthy }
+      ledger-gateway: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-m", "purevoting_rules.live_worker", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    restart: unless-stopped
 
   # OWNER Anik (rules/): audit-agent for the M2 demo (D-15 v1.2, zero cost). Needs AGENT_KEY, CORE_URL, GATEWAY_URL
   # (most agent tools are Gateway reads), AI_PROVIDER (none = template report, else the local runtime Anik picks), AI_BASE_URL,
@@ -64,3 +88,6 @@ services:
   # audit-agent:
   #   build: { context: rules }
   #   ...
+
+volumes:
+  rules-state:
