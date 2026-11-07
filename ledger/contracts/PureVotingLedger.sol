@@ -295,6 +295,20 @@ contract PureVotingLedger {
         emit StateChanged(electionId, ROSTER_FROZEN, coreSeq);
     }
 
+    /// @dev TOKEN_BATCH_ISSUED / TOKEN_REVOKED. Allowed while ROSTER_FROZEN or OPEN. Proposal-bound use
+    /// (TOKEN_REVOKED, TOKEN_REISSUE) needs the proposal logic of week 4, so a non-zero proposalIdOrZero reverts for now.
+    function setTokenSetRoot(bytes32 electionId, bytes32 tokenSetRoot, bytes32 proposalIdOrZero, uint64 coreSeq)
+        external onlyGateway
+    {
+        Election storage e = _get(electionId);
+        if (e.status != ROSTER_FROZEN && e.status != OPEN) revert InvalidStateTransition();
+        if (tokenSetRoot == bytes32(0)) revert ZeroValue();
+        if (proposalIdOrZero != bytes32(0)) revert InvalidStateTransition();
+        _advanceSeq(e, coreSeq);
+        e.tokenSetRoot = tokenSetRoot;
+        emit StateChanged(electionId, e.status, coreSeq);
+    }
+
     function openElection(bytes32 electionId, uint64 coreSeq) external onlyGateway {
         Election storage e = _get(electionId);
         if (e.status != ROSTER_FROZEN) revert InvalidStateTransition();
