@@ -5,7 +5,7 @@
 Environment (all can also be put in the env file): CHAIN_ID, CONTRACT_ADDRESS, GATEWAY_ACCOUNT_KEY, GATEWAY_RPC_URL
 (default: first PINNED_NODE_URL), PINNED_NODE_URL (comma list, reported by GET /v1/chain), CONFIRMATION_DEPTH (2),
 CORE_KEY, RULE_KEY, AGENT_KEY, AUDITOR_KEY (an empty key disables that caller), ANCHOR_BATCH_SECONDS (60),
-ANCHOR_BATCH_EVENTS (50), NODE_LIST (node_id=org_id=url;...), ORG_IDS (default the three demo organizations).
+ANCHOR_BATCH_MAX_EVENTS (50, old name ANCHOR_BATCH_EVENTS also read), NODE_LIST (node_id=org_id=url;...), ORG_IDS (default the three demo organizations).
 """
 import argparse
 import hmac
@@ -55,7 +55,7 @@ def load_config(env_path=None, environ=None):
         "core_url": env.get("CORE_URL", ""), "gateway_key": env.get("GATEWAY_KEY", ""),
         "chain_id": env["CHAIN_ID"], "contract": env["CONTRACT_ADDRESS"], "key": env["GATEWAY_ACCOUNT_KEY"],
         "rpc_url": rpc_url, "pinned_urls": pinned, "depth": int(env.get("CONFIRMATION_DEPTH", "2")),
-        "batch_seconds": int(env.get("ANCHOR_BATCH_SECONDS", "60")), "batch_events": int(env.get("ANCHOR_BATCH_EVENTS", "50")),
+        "batch_seconds": int(env.get("ANCHOR_BATCH_SECONDS", "60")), "batch_events": int(env.get("ANCHOR_BATCH_MAX_EVENTS") or env.get("ANCHOR_BATCH_EVENTS", "50")),
         "keys": {"core": env.get("CORE_KEY", ""), "rule": env.get("RULE_KEY", ""), "agent": env.get("AGENT_KEY", ""),
                  "auditor": env.get("AUDITOR_KEY", "")},
         "org_ids": [o for o in env.get("ORG_IDS", "org_commission,org_observer,org_neutral").split(",") if o],
