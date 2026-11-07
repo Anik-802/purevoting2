@@ -1,0 +1,58 @@
+{
+  "started_at": "2026-11-08 07:26:18",
+  "validators": 3,
+  "A_baseline": {
+    "seconds": 90,
+    "start_head": 2075,
+    "end_head": 2165,
+    "blocks_gained": 90,
+    "longest_stall_s": 1.1,
+    "stalled_at_end_s": 0.4,
+    "chain": {
+      "blocks": 90,
+      "gap_mean_s": 1,
+      "gap_min_s": 1,
+      "gap_max_s": 1,
+      "in_turn_share": 1.0
+    }
+  },
+  "B_stop": {
+    "port": 8543,
+    "pids": [
+      12023
+    ],
+    "stopped": true
+  },
+  "B_one_down": {
+    "seconds": 60,
+    "start_head": 2165,
+    "end_head": 2225,
+    "blocks_gained": 60,
+    "longest_stall_s": 1.9,
+    "stalled_at_end_s": 0.8,
+    "chain": {
+      "blocks": 60,
+      "gap_mean_s": 1,
+      "gap_min_s": 1,
+      "gap_max_s": 1,
+      "in_turn_share": 0.33
+    }
+  },
+  "C_stop": {
+    "port": 8542,
+    "pids": [
+      11949
+    ],
+    "stopped": true
+  },
+  "C_two_down": {
+    "seconds": 45,
+    "start_head": 2225,
+    "end_head": 2226,
+    "blocks_gained": 1,
+    "longest_stall_s": 44.9,
+    "stalled_at_end_s": 44.9
+  },
+  "max_observed_reorg_depth": 0,
+  "reorg_events": []
+}
