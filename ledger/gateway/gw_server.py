@@ -52,6 +52,7 @@ def load_config(env_path=None, environ=None):
         node_id, org_id, url = part.split("=", 2)
         nodes.append({"node_id": node_id, "org_id": org_id, "url": url})
     return {
+        "core_url": env.get("CORE_URL", ""), "gateway_key": env.get("GATEWAY_KEY", ""),
         "chain_id": env["CHAIN_ID"], "contract": env["CONTRACT_ADDRESS"], "key": env["GATEWAY_ACCOUNT_KEY"],
         "rpc_url": rpc_url, "pinned_urls": pinned, "depth": int(env.get("CONFIRMATION_DEPTH", "2")),
         "batch_seconds": int(env.get("ANCHOR_BATCH_SECONDS", "60")), "batch_events": int(env.get("ANCHOR_BATCH_EVENTS", "50")),
@@ -65,7 +66,8 @@ def load_config(env_path=None, environ=None):
 def make_app(cfg, db_path):
     store = Store(db_path)
     chain = ChainClient(cfg["rpc_url"], cfg["chain_id"], cfg["contract"], cfg["key"], cfg["depth"])
-    engine = Engine(store, chain, cfg["org_ids"], cfg["batch_seconds"], cfg["batch_events"])
+    engine = Engine(store, chain, cfg["org_ids"], cfg["batch_seconds"], cfg["batch_events"],
+                    core_url=cfg["core_url"], gateway_key=cfg["gateway_key"])
     return engine, Views(engine, cfg)
 
 

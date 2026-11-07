@@ -10,7 +10,7 @@ The Gateway frame is built first (walking skeleton). Each item below is a tempor
 | G4 | Contract refusal of a transaction | the transaction is sent anyway and the confirmed revert is mapped (TimeNotReached and NotGateway only answer RETRY_LATER without a rejection) | 1 keep | 1 (chain-interface.md "Confirmations") |
 | G5 | Event types outside M1 | REJECTED INVALID_STATE_TRANSITION with detail "not implemented in M1" (consumes the seq) | 1 keep; 2 HTTP 501 | 1 until the week 4 and 5 functions exist |
 | G6 | Request validation | required fields, ids, types and payload_hash only; no full JSON-schema check | 1 keep; 2 add jsonschema | 1 for M1 |
-| G7 | Alerts to Core (ANCHOR_REJECTED, LEDGER_UNAVAILABLE) | logged and kept in memory; health shows "degraded" after an anchor refusal | 1 keep; 2 call Core POST /internal/v1/audit-alerts | 2 once Core's endpoint is fixed in the integration compose |
+| G7 | Alerts to Core | ANCHOR_REJECTED goes to Core POST /internal/v1/audit-alerts with GATEWAY_KEY (CORE_URL, retried in the background); other conditions are logged and shown by /v1/health | decided by contracts v1.1 | none |
 | G8 | Voter batch | closes at 50 events or 60 s, at once when the election is CLOSED | 1 keep | 1 |
 | G9 | Token state check | duplicate token_hash and nullifier_hash only; revoked tokens need TOKEN_REVOKED (week 4) | 1 keep | 1 |
 | G10 | Contract addition | setTokenSetRoot allowed while ROSTER_FROZEN or OPEN; a non-zero proposal id reverts until proposals exist | 1 keep | 1 |

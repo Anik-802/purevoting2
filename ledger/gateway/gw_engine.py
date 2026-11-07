@@ -17,6 +17,7 @@ import random
 import secrets
 import threading
 import time
+import urllib.request
 from calendar import timegm
 from datetime import datetime, timezone
 
@@ -67,8 +68,9 @@ def problem_code_for(revert_name):
 
 class Engine:
     def __init__(self, store, chain, org_ids, batch_seconds=60, batch_events=50, request_wait=3.5,
-                 confirm_timeout=180):
+                 confirm_timeout=180, core_url="", gateway_key=""):
         self.store, self.chain = store, chain
+        self.core_url, self.gateway_key = core_url, gateway_key
         self.org_ids = list(org_ids)
         self.org_by_b32 = {gw_abi.idh(o): o for o in self.org_ids}
         self.batch_seconds, self.batch_events = batch_seconds, batch_events
@@ -508,12 +510,12 @@ class Engine:
         if not row or row["status"] != "ACCEPTED" or row["anchor_id"]:
             return
         t = to_unix(row["occurred_at"])
-        self._send_anchor(row["election_id"], "immediate", [(eid, row["leaf_hash"])], t, t, [eid])
+        self._send_anchor(row["election_id"], "immediate", [(eid, row["leaf_hash"])], t, t, [eid], row["checkpoint"])
 
     def _anchor_batch(self, el):
         try:
             with self.lock:
-                rows = self.store.all("SELECT event_id, leaf_hash, occurred_at FROM voter_events WHERE election_id=? "
+                rows = self.store.all("SELECT event_id, leaf_hash, occurred_at, checkpoint FROM voter_events WHERE election_id=? "
                                       "AND status='PENDING' AND anchor_id IS NULL LIMIT 1000", (el,))
                 if not rows:
                     self.batch_open.pop(el, None)
@@ -522,11 +524,11 @@ class Engine:
                 times = [to_unix(r["occurred_at"]) for r in rows]
                 self.batch_open.pop(el, None)
             self._send_anchor(el, "batched", [(r["event_id"], r["leaf_hash"]) for r in rows], min(times), max(times),
-                              None)
+                              None, max(r["checkpoint"] for r in rows))
         finally:
             self.batch_queued.discard(el)
 
-    def _send_anchor(self, el, mode, leaves, bmin, bmax, system_event_ids):
+    def _send_anchor(self, el, mode, leaves, bmin, bmax, system_event_ids, checkpoint=0):
         with self.lock:
             rej = self._pending_rejections(el)
             anchor_id = rand_id("anc_")
@@ -537,7 +539,7 @@ class Engine:
             try:
                 self.chain.call("commitAnchor", *args, block="latest")
             except Revert as r:
-                self._anchor_failed(el, anchor_id, "precheck revert " + r.name)
+                self._anchor_failed(el, anchor_id, "precheck revert " + r.name, checkpoint)
                 return
             nonce = max(self.local_nonce, self.chain.next_nonce())
             raw, txh = self.chain.build_tx("commitAnchor", args, nonce)
@@ -560,17 +562,46 @@ class Engine:
         except ChainError as e:
             log.warning("anchor broadcast failed, the poller will retry: %s", e)
 
-    def _anchor_failed(self, el, anchor_id, detail):
-        """The contract refused an anchor. Release its events and rejections; recovery is a manual operator action."""
+    def _notify_core(self, election_id, checkpoint, detail):
+        """ANCHOR_REJECTED to Core (ledger-gateway.openapi.yaml: the Gateway raises it when the contract refuses an anchor).
+        Retried in the background; without CORE_URL and GATEWAY_KEY it is only logged."""
+        if not self.core_url or not self.gateway_key:
+            return
+        body = json.dumps({"election_id": election_id, "checkpoint": checkpoint, "kind": "ANCHOR_REJECTED",
+                           "detail": detail[:500]}).encode()
+
+        def send():
+            for wait in (0, 2, 5, 15, 30, 60):
+                time.sleep(wait)
+                try:
+                    req = urllib.request.Request(self.core_url.rstrip("/") + "/internal/v1/audit-alerts", body,
+                                                 {"Content-Type": "application/json", "X-Service-Key": self.gateway_key},
+                                                 method="POST")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        if r.status in (200, 202):
+                            return
+                except Exception as e:  # Core down or refusing: try again later
+                    log.warning("ANCHOR_REJECTED not delivered to Core yet: %s", e)
+            log.error("ANCHOR_REJECTED could not be delivered to Core for %s", election_id)
+
+        threading.Thread(target=send, daemon=True).start()
+
+    def _anchor_failed(self, el, anchor_id, detail, checkpoint=0):
+        """The contract refused an anchor. Release its events and rejections; Core is told (checkpoint = highest
+        checkpoint of the batch); recovery is a manual operator action."""
         with self.lock:
             a = self.store.one("SELECT * FROM anchors WHERE anchor_id=?", (anchor_id,))
             if a:
+                cp = self.store.one("SELECT MAX(checkpoint) AS c FROM voter_events WHERE anchor_id=?", (anchor_id,))["c"]
+                if cp is not None:
+                    checkpoint = cp
                 self.store.update("anchors", "anchor_id", anchor_id, {"status": "FAILED", "detail": detail})
                 self.store.run("UPDATE voter_events SET anchor_id=NULL WHERE anchor_id=?", (anchor_id,))
                 self.store.run("UPDATE events SET anchor_id=NULL WHERE anchor_id=?", (anchor_id,))
                 self.store.run("UPDATE rejections SET anchor_id=NULL WHERE anchor_id=?", (anchor_id,))
             self.anchor_blocked[el] = detail
         self.alert("ANCHOR_REJECTED", f"{el}: {detail}")
+        self._notify_core(el, checkpoint, detail)
 
     def _finalize_anchor(self, a):
         try:
