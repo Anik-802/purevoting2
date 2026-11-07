@@ -128,6 +128,41 @@ def stop(port):
     return {"port": port, "pids": pids, "stopped": head(port) is None}
 
 
+KIT_SCRIPTS = os.path.expanduser("~/pv/kit/scripts")
+
+
+def restart_node(port, peers, observe_port, watcher, timeout=120):
+    # start_node.sh <n> uses RPC port 8540+n; peering as bringup.sh does: peer.py <new port> <existing port>
+    idx = port - 8540
+    h_before = head(observe_port)
+    t0 = time.time()
+    r = subprocess.run(["bash", os.path.join(KIT_SCRIPTS, "start_node.sh"), str(idx)], capture_output=True, text=True)
+    t_rpc = t_peer = t_resume = t_caught = None
+    next_poll = 0.0
+    while time.time() - t0 < timeout:
+        now = time.time() - t0
+        hn, ho = head(port), head(observe_port)
+        if hn is not None and t_rpc is None:
+            t_rpc = now
+        if t_rpc is not None and t_peer is None:
+            for q in peers:
+                subprocess.run(["python3", os.path.join(KIT_SCRIPTS, "peer.py"), str(port), str(q)], capture_output=True, text=True)
+            t_peer = time.time() - t0
+        if t_resume is None and ho is not None and h_before is not None and ho > h_before:
+            t_resume = now
+        if t_caught is None and t_peer is not None and hn is not None and ho is not None and hn >= ho - 1:
+            t_caught = now
+        if now >= next_poll:
+            watcher.poll()
+            next_poll = now + 1.0
+        if t_caught is not None and t_resume is not None:
+            break
+        time.sleep(0.3)
+    rd = lambda v: None if v is None else round(v, 1)
+    return {"port": port, "start_rc": r.returncode, "rpc_up_s": rd(t_rpc), "peered_s": rd(t_peer),
+            "chain_resumed_s": rd(t_resume), "caught_up_s": rd(t_caught)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ports", default="8541,8542,8543", help="validator RPC ports")
@@ -138,6 +173,7 @@ def main():
     ap.add_argument("--one-down", type=int, default=60)
     ap.add_argument("--two-down", type=int, default=45)
     ap.add_argument("--depth", type=int, default=8, help="blocks re-checked per node and poll")
+    ap.add_argument("--restart", action="store_true", help="phase D: restart the stopped validators and time recovery")
     ap.add_argument("--out", default="/tmp/measure_chain.json")
     a = ap.parse_args()
     ports = [int(x) for x in a.ports.split(",")]
@@ -167,6 +203,14 @@ def main():
     res["C_stop"] = stop(a.kill_second)
     res["C_two_down"] = observe(a.observe_port, a.two_down, watcher)
 
+    if a.restart:
+        print("D  restarting the stopped validators one by one ...", flush=True)
+        live = [a.observe_port]
+        res["D_restart"] = []
+        for q in (a.kill_second, a.kill_first):
+            res["D_restart"].append(restart_node(q, list(live), a.observe_port, watcher))
+            live.append(q)
+
     res["max_observed_reorg_depth"] = watcher.max_reorg
     res["reorg_events"] = watcher.events[:20]
     with open(a.out, "w") as f:
@@ -184,6 +228,9 @@ def main():
           f" chain gap max {B['chain'].get('gap_max_s')} s; longest stall {B['longest_stall_s']} s")
     print(f"C 2 down:    stopped={res['C_stop']['stopped']}; {C['blocks_gained']} blocks in {C['seconds']} s;"
           f" stalled at end {C['stalled_at_end_s']} s (halted if blocks stop)")
+    for d in res.get("D_restart", []):
+        print(f"D restart {d['port']}: rpc up {d['rpc_up_s']} s, peered {d['peered_s']} s,"
+              f" chain resumed {d['chain_resumed_s']} s, caught up {d['caught_up_s']} s (from the start command; None = not reached)")
     print(f"max observed reorg depth (last {a.depth} blocks, all phases): {res['max_observed_reorg_depth']}")
     print(f"details: {a.out}")
     print("\nThe network is now damaged on purpose. Rebuild it with: bash ~/pv/up.sh")

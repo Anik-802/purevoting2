@@ -17,3 +17,19 @@ Limits:
 - Resume time after a validator restarts was not measured yet.
 - A stall of about 1.9 s plus the 2 s confirmation can exceed the Gateway's 3.5 s wait (DECISIONS G2). The Gateway then
   answers RETRY_LATER and Core's retry gets DUPLICATE with the transaction info, which Core treats as success.
+
+## Run 2 (same day, with `--restart`)
+
+Raw data: `chain_2026-11-08_restart.json`. Phases A to C repeated run 1: one validator down kept 60 blocks in 60 s
+(longest stall 1.9 s), two down gave 0 blocks in 45 s (halted), maximum observed reorg depth 0.
+
+| Item | Result |
+|---|---|
+| Chain resumes after the first stopped validator restarts (two validators up) | 1.4 s after the start command |
+| Validator down about 2 min (about 100 blocks behind) restarts, peers and catches up | 13.4 s after the start command (RPC up 0.3 s, peered 0.5 s) |
+
+Reading the restart numbers:
+- The first restart's "caught up 0.4 s" is not meaningful: the chain was halted, so the node was already at the head.
+- The second restart's "chain resumed 1.1 s" is not meaningful: the chain was already running with two validators.
+- Peering is manual (`peer.py`, as in `bringup.sh`) because the nodes run with `--nodiscover`. In the compose network the
+  validators need static peers or a bootnode, or a restarted container will not rejoin on its own.
