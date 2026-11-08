@@ -263,6 +263,12 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '503':
+          description: LEDGER_UNAVAILABLE — the organization registry could not be read from the Gateway (unreachable or
+            malformed); nothing is stored, retry with the same Idempotency-Key
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
     get:
       tags: [elections]
       operationId: listElections
@@ -531,6 +537,12 @@ paths:
               schema: { $ref: '#/components/schemas/Election' }
         '409':
           description: INVALID_STATE_TRANSITION, FINDINGS_UNREVIEWED or AUDIT_UNRESOLVED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '503':
+          description: LEDGER_UNAVAILABLE — the finding records (and their contract status) could not be read from the
+            Gateway; nothing is requested, retry
           content:
             application/problem+json:
               schema: { $ref: './common.schema.json#/$defs/Problem' }
