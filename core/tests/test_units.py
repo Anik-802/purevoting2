@@ -180,6 +180,59 @@ def test_gateway_events_reads_every_page():
     assert len(endless.cursors) == 1000
 
 
+def test_gateway_organizations_unreadable_is_unavailable():
+    """Election creation reads the registry: a Gateway that is down or answers garbage is unavailable (503 there)."""
+    import httpx
+
+    from app.gateway import GatewayClient, GatewayUnavailable
+
+    class Answer:
+        def __init__(self, fn):
+            self.fn = fn
+
+        def get(self, path, params=None, headers=None):
+            return self.fn()
+
+    def down():
+        raise httpx.ConnectError("refused")
+
+    item = {"org_id": "org_commission", "signer": "0x" + "a1" * 20, "is_operator": True}
+    assert GatewayClient(http=Answer(lambda: httpx.Response(200, json={"items": [item]}))).organizations() == [item]
+    for fn in (down, lambda: httpx.Response(502), lambda: httpx.Response(404), lambda: httpx.Response(200, content=b"<html>"),
+               lambda: httpx.Response(200, json={"items": [1]}), lambda: httpx.Response(200, json=[]),
+               lambda: httpx.Response(200, json={"items": [{"org_id": "org_x", "is_operator": True}]}),
+               lambda: httpx.Response(200, json={"items": [item | {"is_operator": "yes"}]})):
+        with pytest.raises(GatewayUnavailable):
+            GatewayClient(http=Answer(fn)).organizations()
+
+
+def test_receipt_anchor_unreadable_stays_received():
+    """A voter receipt is ANCHORED only on a complete anchor; an unreadable or incomplete Gateway answer is RECEIVED."""
+    import httpx
+
+    from app import routes_public
+    from app.gateway import GatewayClient, set_gateway
+
+    class Answer:
+        def __init__(self, resp):
+            self.resp = resp
+
+        def get(self, path, params=None, headers=None, timeout=None):
+            return self.resp
+
+    full = {"status": "ANCHORED", "anchor_id": "anc_1", "tx_hash": "0x" + "ab" * 32}
+    cases = [(httpx.Response(200, json={"anchor": full}), "ANCHORED"), (httpx.Response(200, content=b"<html>"), "RECEIVED"),
+             (httpx.Response(200, json=["x"]), "RECEIVED"), (httpx.Response(200, json={"anchor": "ANCHORED"}), "RECEIVED"),
+             (httpx.Response(200, json={"anchor": {"status": "ANCHORED"}}), "RECEIVED"), (httpx.Response(404), "RECEIVED")]
+    try:
+        for resp, want in cases:
+            set_gateway(GatewayClient(http=Answer(resp)))
+            rec = routes_public._resolve_anchor({"status": "RECEIVED", "anchor_event_id": "evr_1"})
+            assert rec["status"] == want and "anchor_event_id" not in rec
+    finally:
+        set_gateway(None)
+
+
 def test_tally_plaintext_is_compared_after_parsing():
     from app.tally import valid_choice
     ids = {"cand_A", "cand_B"}

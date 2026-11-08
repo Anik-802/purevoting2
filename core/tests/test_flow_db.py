@@ -912,3 +912,27 @@ def test_tally_invalid_rows_and_rejected_publish(env):
     alerts = c.get(f"/v1/elections/{eid}/audit-alerts", headers=auth).json()["items"]
     assert any(a["kind"] == "TRANSITION_REJECTED" for a in alerts)
     assert c.post(f"/v1/elections/{eid}:finalize", headers=auth).json()["code"] == "INVALID_STATE_TRANSITION"
+
+
+def test_create_with_gateway_down_is_503_and_retryable(env):
+    """The registry read at creation: Gateway down → 503 problem+json, nothing stored, and the same Idempotency-Key
+    succeeds once it is back."""
+    import httpx
+
+    class Down:
+        def get(self, *a, **k):
+            raise httpx.ConnectError("refused")
+
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    body = {"title": "Gateway down", "window_start": iso(t0 + 10 * B), "window_end": iso(t0 + 20 * B),
+            "time_bucket_seconds": B, "checkpoint_interval_seconds": B, "candidates": [{"name": "Kim"}, {"name": "Lee"}],
+            "org_ids": ["org_commission", "org_neutral", "org_observer"], "approval_threshold": 2}
+    headers = auth | {"Idempotency-Key": "gwdown-" + secrets.token_hex(8)}
+    set_gateway(GatewayClient(http=Down()))
+    r = c.post("/v1/elections", headers=headers, json=body)
+    assert r.status_code == 503 and r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "LEDGER_UNAVAILABLE"
+    set_gateway(GatewayClient(http=TestClient(fake_gateway.app)))
+    r = c.post("/v1/elections", headers=headers, json=body)
+    assert r.status_code == 201, r.text
+    assert c.post("/v1/elections", headers=headers, json=body).json()["election_id"] == r.json()["election_id"]

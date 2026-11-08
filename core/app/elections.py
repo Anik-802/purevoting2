@@ -12,7 +12,7 @@ from sqlalchemy import text
 from app import hashing, ledger, lifecycle, timeutil
 from app.config import settings
 from app.errors import Problem
-from app.gateway import get_gateway
+from app.gateway import GatewayUnavailable, get_gateway
 from app.ids import random_id, token128, ulid
 from app.store import jsonb, load_election, record_rejection, set_status
 from app.timeutil import from_dt, iso, parse_iso, to_dt
@@ -52,7 +52,10 @@ def create(conn, staff, body: dict, now: int) -> str:
     if len(set(org_ids)) != len(org_ids) or len(org_ids) < 3 or not 2 <= threshold <= len(org_ids) - 1:
         raise Problem(422, "VALIDATION_ERROR", "need >= 3 distinct orgs and 2 <= approval_threshold <= orgs - 1")
 
-    registry = {o["org_id"]: o for o in get_gateway().organizations()}
+    try:
+        registry = {o["org_id"]: o for o in get_gateway().organizations()}
+    except GatewayUnavailable:
+        raise Problem(503, "LEDGER_UNAVAILABLE", "organization registry not readable; retry") from None
     missing = [o for o in org_ids if o not in registry]
     if missing:
         raise Problem(422, "ORG_NOT_REGISTERED", ", ".join(missing))

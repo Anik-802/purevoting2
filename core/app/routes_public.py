@@ -48,8 +48,10 @@ def _resolve_anchor(rec: dict) -> dict:
             ev = get_gateway().event(event_id, timeout=1.5)   # voter endpoints answer within 3 s
         except GatewayUnavailable:
             ev = None
-        anchor = (ev or {}).get("anchor") or {}
-        if anchor.get("status") == "ANCHORED":
+        anchor = (ev or {}).get("anchor")
+        anchor = anchor if isinstance(anchor, dict) else {}
+        if anchor.get("status") == "ANCHORED" and isinstance(anchor.get("anchor_id"), str) \
+                and isinstance(anchor.get("tx_hash"), str):   # an incomplete anchor reads as not anchored yet
             rec |= {"status": "ANCHORED", "anchor_id": anchor["anchor_id"], "tx_hash": anchor["tx_hash"]}
     return rec
 

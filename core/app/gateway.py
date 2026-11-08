@@ -1,11 +1,10 @@
 """Client for the Ledger Gateway (contracts/ledger-gateway.openapi.yaml), called with coreKey.
 
-Until M1 (docs/schedule.md) the other side is a mock (prism, or tools/fake_gateway.py for a stateful run); the client does not care.
+Until M1 (docs/schedule.md) the other side is devtools/fake_gateway.py (compose mock profile); the client does not care.
 """
 import httpx
 
 from app.config import settings
-from app.errors import Problem
 
 TIMEOUT = 5.0   # README "Timeouts / retries": 5 s per inter-service call
 MAX_EVENT_PAGES = 1000   # GET /v1/events: 1000 pages of 1000 events; a Gateway that never ends the listing is unavailable
@@ -61,10 +60,18 @@ class GatewayClient:
         return body
 
     def organizations(self) -> list[dict]:
+        """The organization registry; refused or malformed (an item without org_id, signer or is_operator) is unavailable."""
         r = self._get("/v1/organizations")
         if r.status_code != 200:
-            raise Problem(503, "LEDGER_UNAVAILABLE", "organization registry not readable")
-        return r.json()["items"]
+            raise GatewayUnavailable(f"GET /v1/organizations: HTTP {r.status_code}")
+        try:
+            items = r.json()["items"]
+            if not all(isinstance(o["org_id"], str) and isinstance(o["signer"], str)
+                       and isinstance(o["is_operator"], bool) for o in items):
+                raise TypeError
+        except Exception:   # noqa: BLE001 — anything unparsable is unavailable, never a 500
+            raise GatewayUnavailable("GET /v1/organizations: malformed") from None
+        return items
 
     def finding_records(self, election_id: str) -> list[dict]:
         """Every finding record of the election with its contract_status (all pages, at most MAX_EVENT_PAGES); a
@@ -127,7 +134,13 @@ class GatewayClient:
             r = self.http.get(f"/v1/events/{event_id}", headers=self._headers(), timeout=timeout)
         except httpx.HTTPError as e:
             raise GatewayUnavailable(str(e)) from None
-        return r.json() if r.status_code == 200 else None
+        if r.status_code != 200:
+            return None
+        try:
+            ev = r.json()
+        except ValueError:
+            return None
+        return ev if isinstance(ev, dict) else None   # unreadable = not known yet
 
 
 _client: GatewayClient | None = None

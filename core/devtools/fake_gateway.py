@@ -168,7 +168,7 @@ def finding_records(election_id: str, limit: int = 100, cursor: str | None = Non
 
 @app.get("/v1/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "implementation": "fake"}   # devtools/demo_flow.py names the Gateway from this
 
 
 @app.get("/v1/chain")

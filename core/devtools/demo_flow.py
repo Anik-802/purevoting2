@@ -4,8 +4,9 @@
     docker compose exec core python -m devtools.demo_flow
 
 It talks to Core over HTTP exactly as the admin web and the voter web will (login, create, roster, freeze, links,
-redeem, ballot, receipt) and prints each step with what Core answered. The Gateway is the fake one (no chain); the
-creation check reads its /rpc node stand-in (PINNED_NODE_URL=http://ledger-gateway:8100/rpc in .env). It creates a throwaway
+redeem, ballot, receipt) and prints each step with what Core answered. It runs against whichever Gateway Core is
+configured with (the fake one of the mock profile, whose /rpc stands in for the pinned node, or the real one) and
+names it in the banner. It creates a throwaway
 admin account with a random password; no secrets are printed.
 """
 import base64
@@ -21,7 +22,9 @@ from sqlalchemy import text
 
 from app import hashing
 from app.auth import hash_password
+from app.config import settings
 from app.db import get_engine
+from app.gateway import GatewayClient, GatewayUnavailable
 from app.ids import ulid
 from app.timeutil import iso
 
@@ -82,10 +85,27 @@ def poll(fn, timeout: int, why: str):
     fail(f"{timeout}초 안에 {why} 확인 실패")
 
 
+def gateway_label() -> str:
+    """Which Gateway Core talks to: the fake one (devtools/fake_gateway.py) says so in GET /v1/health."""
+    try:
+        r = httpx.get(settings.gateway_url.rstrip("/") + "/v1/health", timeout=3)
+        body = r.json() if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return "Gateway 응답 없음"
+    if not isinstance(body, dict):
+        return f"Gateway 상태 확인 실패 (HTTP {r.status_code})"
+    try:
+        chain_id = GatewayClient().chain().get("chain_id")
+    except GatewayUnavailable:
+        chain_id = "?"
+    kind = "가짜" if body.get("implementation") == "fake" else "실제"
+    return f"{kind} Gateway (chain_id {chain_id})"
+
+
 def main() -> None:
     print("=" * 64)
     print(" PureVoting 2.0 Core — 선거 진행 흐름 시연 (실제 시간)")
-    print(f" 서버 {CORE} · 가짜 Gateway · 시간 구간 {B}초 · 투표 시간 {WINDOW}초")
+    print(f" 서버 {CORE} · {gateway_label()} · 시간 구간 {B}초 · 투표 시간 {WINDOW}초")
     print("=" * 64)
 
     step("서버 상태 확인")
