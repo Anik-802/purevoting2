@@ -26,7 +26,7 @@ from gw_views import NotFound, Views  # noqa: E402
 
 log = logging.getLogger("gateway")
 READERS = ("core", "rule", "agent", "auditor")
-NOT_IMPLEMENTED = [re.compile(p) for p in (r"^/v1/proposals(/.*)?$", r"^/v1/finding-records(/.*)?$")]
+NOT_IMPLEMENTED = [re.compile(p) for p in (r"^/v1/proposals(/.*)?$", r"^/v1/finding-records/[^/]+/reviews$")]
 
 
 def read_env_file(path):
@@ -121,6 +121,11 @@ def make_handler(cfg, engine, views):
                     if not isinstance(events, list) or not 1 <= len(events) <= 500:
                         raise ValidationError("body must be {events: [1..500 items]}")
                     return self.send_json(200, {"results": engine.submit(events)})
+                if method == "POST" and path == "/v1/finding-records":
+                    if role != "rule":
+                        return problem(self, 403, "FORBIDDEN", "only the Rule Engine key may record findings")
+                    status, out = engine.record_finding(self.read_json())
+                    return self.send_json(status, out, "application/problem+json" if status >= 400 else "application/json")
                 if method == "POST" and path == "/v1/verify":
                     ids = self.read_json().get("event_ids")
                     if not isinstance(ids, list) or not 1 <= len(ids) <= 1000:
@@ -199,6 +204,9 @@ def make_handler(cfg, engine, views):
             m = re.match(r"^/v1/anchors/(anc_[0-9A-HJKMNP-TV-Z]{26})(/leaves)?$", path)
             if m:
                 return self.send_json(200, views.anchor_leaves(m.group(1)) if m.group(2) else views.get_anchor(m.group(1)))
+            if path == "/v1/finding-records":
+                return self.send_json(200, views.list_finding_records(
+                    {"election_id": self.one(q, "election_id", True), **self.page_args(q)}))
             if path == "/v1/chain":
                 return self.send_json(200, views.chain_info())
             if path == "/v1/organizations":

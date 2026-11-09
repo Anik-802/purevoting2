@@ -66,6 +66,14 @@ def problem_code_for(revert_name):
     return "ORG_NOT_REGISTERED" if revert_name in ORG_REVERTS else "INVALID_STATE_TRANSITION"
 
 
+# events whose source is the Gateway itself; they have their own seq counter (election_seq key "gw:<election_id>")
+GATEWAY_TYPES = ("FINDING_RECORDED", "FINDING_REVIEWED", "ADMIN_ACTION_REQUESTED", "APPROVAL_RECORDED", "PROPOSAL_CLOSED")
+GATEWAY_SQL = ",".join("'%s'" % t for t in GATEWAY_TYPES)
+RULE_CODE = {"R1": 1, "R2": 2, "R3": 3, "R4": 4, "R5": 5}
+RESULT_CODE = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2}
+FINDING_STATUS = ["NOT_REQUIRED", "PENDING", "RESOLVED", "SUPERSEDED", "CONFIRMED_ISSUE"]
+
+
 class Engine:
     def __init__(self, store, chain, org_ids, batch_seconds=60, batch_events=50, request_wait=3.5,
                  confirm_timeout=180, core_url="", gateway_key=""):
@@ -278,6 +286,89 @@ class Engine:
         return self._res(eid, "RETRY_LATER", detail="transaction is waiting for confirmation (depth %d)"
                          % self.chain.depth)
 
+    # ---- finding records (Rule Engine: POST /v1/finding-records)
+    @staticmethod
+    def _problem(status, code, title, detail=None):
+        out = {"type": "about:blank", "title": title, "status": status, "code": code}
+        if detail:
+            out["detail"] = detail
+        return status, out
+
+    @staticmethod
+    def _check_finding_body(body):
+        import re
+        need = {"election_id", "finding_id", "rule_id", "result", "finding_checkpoint", "finding_hash", "signature"}
+        if not isinstance(body, dict) or set(body) != need:
+            raise ValidationError("body must have exactly: " + ", ".join(sorted(need)))
+        sig = body["signature"]
+        ok = (re.fullmatch(r"elc_[0-9A-HJKMNP-TV-Z]{26}", str(body["election_id"]))
+              and re.fullmatch(r"fnd_[0-9A-HJKMNP-TV-Z]{26}", str(body["finding_id"]))
+              and body["rule_id"] in RULE_CODE and body["result"] in RESULT_CODE
+              and isinstance(body["finding_checkpoint"], int) and not isinstance(body["finding_checkpoint"], bool)
+              and body["finding_checkpoint"] >= 0
+              and re.fullmatch(r"[0-9a-f]{64}", str(body["finding_hash"]))
+              and isinstance(sig, dict) and set(sig) == {"scheme", "signer", "value"}
+              and sig["scheme"] == "eip191-secp256k1"
+              and re.fullmatch(r"0x[0-9a-f]{40}", str(sig["signer"]))
+              and re.fullmatch(r"0x[0-9a-f]{130}", str(sig["value"])))
+        if not ok:
+            raise ValidationError("finding record fields are malformed (ids, rule_id R1..R5, result, hash, signature)")
+        return body
+
+    def _finding_refusal(self, name):
+        table = {"SignatureInvalid": (422, "SIGNATURE_INVALID", "signature is not the Rule Engine's"),
+                 "CheckpointNotCommitted": (422, "CHECKPOINT_NOT_FOUND", "finding_checkpoint is not committed yet"),
+                 "FindingConflict": (409, "FINDING_CONFLICT", "this finding_id is recorded with other content"),
+                 "ElectionNotFound": (404, "NOT_FOUND", "unknown election"),
+                 "InvalidFinding": (422, "VALIDATION_ERROR", "rule, result or id text is invalid"),
+                 "NotGateway": (503, "LEDGER_UNAVAILABLE", "Gateway account is not registered or confirmed on chain")}
+        status, code, title = table.get(name, (409, "INVALID_STATE_TRANSITION", "contract refused: " + name))
+        return self._problem(status, code, title)
+
+    def record_finding(self, body):
+        """(http_status, json_body). 201 recorded, 200 identical resubmission, 409 / 422 / 503 as problems."""
+        b = self._check_finding_body(body)
+        el, deadline = b["election_id"], time.monotonic() + self.request_wait
+        created = False
+        with self.lock:
+            eid = None
+            for row in self.store.all("SELECT * FROM events WHERE election_id=? AND type='FINDING_RECORDED'", (el,)):
+                old = json.loads(row["submission"])["payload"]
+                if old["finding_id"] != b["finding_id"]:
+                    continue
+                if old["finding_hash"] != b["finding_hash"] or row["status"] == "REJECTED":
+                    return self._problem(409, "FINDING_CONFLICT", "this finding_id is recorded or refused with other content")
+                eid = row["event_id"]
+                if row["status"] == "DEFERRED":
+                    self.store.update("events", "event_id", eid, {"status": "QUEUED", "detail": None})
+                    self.q.put(("event", eid))
+                break
+            if eid is None:
+                st = self._state(el)
+                cp = max(st["last_checkpoint"] if st else 0, b["finding_checkpoint"]) + 1
+                payload = {"finding_id": b["finding_id"], "rule_id": b["rule_id"], "result": b["result"],
+                           "finding_checkpoint": b["finding_checkpoint"], "finding_hash": b["finding_hash"],
+                           "signature": b["signature"], "submitted_via": "gateway"}
+                ev = {"event_id": rand_id("evt_"), "schema_version": "1", "election_id": el, "type": "FINDING_RECORDED",
+                      "source": "gateway", "seq": self._last_assigned("gw:" + el) + 1, "checkpoint": cp,
+                      "occurred_at": now_iso(), "time_precision": "exact", "actor": {"kind": "system"},
+                      "payload": payload, "payload_hash": pv_hash.Hc(payload)}
+                name, args = self._call_for(ev)
+                try:
+                    self.chain.call(name, *args, block="latest")
+                except Revert as r:
+                    return self._finding_refusal(r.name)
+                self._insert_event(ev, "QUEUED")
+                self._set_last_assigned("gw:" + el, ev["seq"])
+                self.q.put(("event", ev["event_id"]))
+                eid, created = ev["event_id"], True
+        res = self._wait_result(eid, deadline)
+        if res["status"] == "ACCEPTED":
+            return (201 if created else 200), {"event_id": eid}
+        if res["status"] == "REJECTED":
+            return self._problem(409, "INVALID_STATE_TRANSITION", "contract refused the finding record", res.get("detail"))
+        return self._problem(503, "LEDGER_UNAVAILABLE", "not confirmed yet; send the same request again")
+
     # ---- event to contract call
     def _call_for(self, ev):
         p, el, seq, t = ev["payload"], gw_abi.idh(ev["election_id"]), ev["seq"], ev["type"]
@@ -304,6 +395,11 @@ class Engine:
                                         gw_abi.hex32(pv_hash.Hc(p["tables"])), seq]
         if t == "TALLY_PUBLISHED":
             return "publishTally", [el, gw_abi.hex32(p["result_hash"]), p["final_checkpoint"], seq]
+        if t == "FINDING_RECORDED":
+            return "relayFindingRecord", [gw_abi.idh(p["finding_id"]), el, RULE_CODE[p["rule_id"]],
+                                          RESULT_CODE[p["result"]], p["finding_checkpoint"],
+                                          gw_abi.hex32(p["finding_hash"]), p["signature"]["value"],
+                                          p["finding_id"], ev["election_id"]]
         raise Unsupported(t)
 
     # ------------------------------------------------------------------ worker thread (all chain writes)
@@ -372,11 +468,17 @@ class Engine:
 
     def _defer(self, row, code):
         """RETRY_LATER: the event was not applied; give its seq back and hold every later queued event of the election."""
+        if row["type"] in GATEWAY_TYPES:      # Gateway-sourced: the caller retries with the same finding_id
+            with self.lock:
+                self.store.update("events", "event_id", row["event_id"],
+                                  {"status": "DEFERRED", "detail": code, "tx_hash": None, "raw_tx": None})
+            return
         with self.lock:
             el = row["election_id"]
             self.store.update("events", "event_id", row["event_id"],
                               {"status": "DEFERRED", "detail": code, "tx_hash": None, "raw_tx": None})
-            self.store.run("UPDATE events SET status='DEFERRED', detail=? WHERE election_id=? AND seq>? AND status='QUEUED'",
+            self.store.run("UPDATE events SET status='DEFERRED', detail=? WHERE election_id=? AND seq>? AND status='QUEUED' "
+                           "AND type NOT IN (" + GATEWAY_SQL + ")",
                            (code, el, row["seq"]))
             self._set_last_assigned(el, row["seq"] - 1)
 

@@ -8,7 +8,7 @@ import json
 import gw_abi
 import pv_hash
 from gw_chain import ChainError
-from gw_engine import STATUS_NAMES, now_iso, to_iso, to_unix
+from gw_engine import FINDING_STATUS, GATEWAY_SQL, STATUS_NAMES, now_iso, to_iso, to_unix
 
 
 class NotFound(Exception):
@@ -71,12 +71,25 @@ class Views:
 
     def _last_final_seq(self, el):
         n = 0
-        for r in self.store.all("SELECT seq, status FROM events WHERE election_id=? ORDER BY seq", (el,)):
+        for r in self.store.all("SELECT seq, status FROM events WHERE election_id=? AND type NOT IN (" + GATEWAY_SQL + ") ORDER BY seq", (el,)):
             if r["status"] in ("ACCEPTED", "REJECTED") and r["seq"] == n + 1:
                 n = r["seq"]
             else:
                 break
         return n
+
+    def list_finding_records(self, q):
+        """FINDING_RECORDED events of an election, grouped per finding, with the contract's own status."""
+        items = []
+        for row, voter in self._all_events(q["election_id"]):
+            if voter or row["type"] != "FINDING_RECORDED":
+                continue
+            ev = self._event_view(row, False)
+            fid = ev["payload"]["finding_id"]
+            rec = self.chain.call("findingRecord", gw_abi.idh(fid), block="confirmed")
+            items.append({"finding_id": fid, "recorded": ev, "reviews": [], "contract_status": FINDING_STATUS[rec[5]]})
+        page, nxt = _page(items, q.get("limit", 100), q.get("cursor"))
+        return {"items": page, "next_cursor": nxt}
 
     def get_event(self, event_id):
         row = self.store.one("SELECT * FROM events WHERE event_id=? AND status='ACCEPTED'", (event_id,))

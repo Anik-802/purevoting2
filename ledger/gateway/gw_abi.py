@@ -22,6 +22,7 @@ FUNCS = {
     "commitCheckpoint": (["bytes32", "uint64", "uint8", "bytes32", "uint64"], []),
     "commitAnchor": (["bytes32", "bytes32", "bytes32", "bytes32", "uint8", "uint32", "uint64", "uint64"], []),
     "publishTally": (["bytes32", "bytes32", "uint64", "uint64"], []),
+    "relayFindingRecord": (["bytes32", "bytes32", "uint8", "uint8", "uint64", "bytes32", "bytes", "string", "string"], []),
     # reads
     "electionState": (["bytes32"], ["uint8", "uint64", "uint64", "uint32", "bytes32", "bytes32", "bytes32", "bytes32", "uint64", "uint64", "bytes32"]),
     "electionGovernance": (["bytes32"], ["bytes32[]", "uint8", "bytes32", "uint32", "uint32"]),
@@ -34,6 +35,7 @@ FUNCS = {
     "operatorOrg": ([], ["bytes32", "bool"]),
     "ruleEngineSigner": ([], ["address", "bytes32", "bool"]),
     "gatewayAccount": ([], ["address", "bytes32", "bool"]),
+    "findingRecord": (["bytes32"], ["bytes32", "bytes32", "uint8", "uint8", "uint64", "uint8"]),
 }
 
 ERRORS = [
@@ -43,7 +45,7 @@ ERRORS = [
     "InvalidWindow", "EmptyRoster", "InvalidStateTransition", "TimeNotReached", "SeqNotIncreasing",
     "CheckpointNotIncreasing", "InvalidReason", "EarlyCloseNotImplemented", "InvalidMode", "InvalidBuckets",
     "AnchorConflict", "AnchorBeyondWindowEnd", "IndexOutOfRange", "InvalidFinalCheckpoint",
-    "CloseFinalAlreadyCommitted",
+    "CloseFinalAlreadyCommitted", "SignatureInvalid", "FindingConflict", "CheckpointNotCommitted", "InvalidFinding",
 ]
 
 
@@ -84,15 +86,27 @@ def _word(t, v):
     raise ValueError(t)
 
 
+def _dynamic(t, v):
+    if t == "bytes32[]":
+        return len(v).to_bytes(32, "big") + b"".join(_word("bytes32", x) for x in v)
+    if t == "string":
+        raw = v.encode("utf-8")
+    elif isinstance(v, str):
+        raw = bytes.fromhex(v[2:] if v.startswith("0x") else v)
+    else:
+        raw = bytes(v)
+    return len(raw).to_bytes(32, "big") + raw.ljust((len(raw) + 31) // 32 * 32, b"\0")
+
+
 def encode_args(types, values):
     if len(types) != len(values):
         raise ValueError("argument count")
     head, tail = b"", b""
     base = 32 * len(types)
     for t, v in zip(types, values):
-        if t == "bytes32[]":
+        if t in ("bytes32[]", "bytes", "string"):
             head += (base + len(tail)).to_bytes(32, "big")
-            tail += len(v).to_bytes(32, "big") + b"".join(_word("bytes32", x) for x in v)
+            tail += _dynamic(t, v)
         else:
             head += _word(t, v)
     return head + tail
