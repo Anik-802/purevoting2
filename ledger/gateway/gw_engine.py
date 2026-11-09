@@ -66,6 +66,20 @@ def problem_code_for(revert_name):
     return "ORG_NOT_REGISTERED" if revert_name in ORG_REVERTS else "INVALID_STATE_TRANSITION"
 
 
+def _raw_nonce(raw):
+    """Nonce of a signed legacy transaction (an RLP list whose first item is the nonce)."""
+    if isinstance(raw, str):
+        raw = bytes.fromhex(raw[2:] if raw.startswith("0x") else raw)
+    raw = bytes(raw)
+    i = 1 if raw[0] < 0xf8 else 1 + (raw[0] - 0xf7)         # skip the list header
+    b = raw[i]
+    if b < 0x80:
+        return b
+    if b <= 0xb7:
+        return int.from_bytes(raw[i + 1: i + 1 + (b - 0x80)], "big")
+    raise ValueError("unexpected nonce encoding")
+
+
 # events whose source is the Gateway itself; they have their own seq counter (election_seq key "gw:<election_id>")
 GATEWAY_TYPES = ("FINDING_RECORDED", "FINDING_REVIEWED", "ADMIN_ACTION_REQUESTED", "APPROVAL_RECORDED", "PROPOSAL_CLOSED")
 GATEWAY_SQL = ",".join("'%s'" % t for t in GATEWAY_TYPES)
@@ -93,10 +107,20 @@ class Engine:
         self.alerts = []              # in-memory alert log (Core alert delivery is not wired in M1)
         self._state_cache = {}
         self._rebroadcast = {}
+        self._anchor_scan = -1e9      # monotonic time of the last scan for events without an anchor
+        self._anchor_queued = {}      # event_id -> monotonic time it was last queued for its anchor by the scan
         self.threads = []
 
     # ------------------------------------------------------------------ life cycle
     def start(self):
+        held = [r["nonce"] for r in self.store.all("SELECT nonce FROM events WHERE status='SENT' AND nonce IS NOT NULL")]
+        for r in self.store.all("SELECT raw_tx FROM anchors WHERE status='SENT' AND raw_tx IS NOT NULL"):
+            try:
+                held.append(_raw_nonce(r["raw_tx"]))
+            except (ValueError, IndexError):
+                log.warning("could not read the nonce of a stored anchor transaction")
+        if held:
+            self.local_nonce = max(self.local_nonce, max(held) + 1)
         with self.lock:
             for r in self.store.all("SELECT event_id FROM events WHERE status='QUEUED' ORDER BY rowid"):
                 self.q.put(("event", r["event_id"]))
@@ -318,7 +342,7 @@ class Engine:
     def _finding_refusal(self, name):
         table = {"SignatureInvalid": (422, "SIGNATURE_INVALID", "signature is not the Rule Engine's"),
                  "CheckpointNotCommitted": (422, "CHECKPOINT_NOT_FOUND", "finding_checkpoint is not committed yet"),
-                 "FindingConflict": (409, "FINDING_CONFLICT", "this finding_id is recorded with other content"),
+                 "FindingConflict": (409, "CONFLICT", "this finding_id is recorded with other content"),
                  "ElectionNotFound": (404, "NOT_FOUND", "unknown election"),
                  "InvalidFinding": (422, "VALIDATION_ERROR", "rule, result or id text is invalid"),
                  "NotGateway": (503, "LEDGER_UNAVAILABLE", "Gateway account is not registered or confirmed on chain")}
@@ -337,7 +361,7 @@ class Engine:
                 if old["finding_id"] != b["finding_id"]:
                     continue
                 if old["finding_hash"] != b["finding_hash"] or row["status"] == "REJECTED":
-                    return self._problem(409, "FINDING_CONFLICT", "this finding_id is recorded or refused with other content")
+                    return self._problem(409, "CONFLICT", "this finding_id is recorded or refused with other content")
                 eid = row["event_id"]
                 if row["status"] == "DEFERRED":
                     self.store.update("events", "event_id", eid, {"status": "QUEUED", "detail": None})
@@ -733,12 +757,26 @@ class Engine:
         while not self.stop.is_set():
             try:
                 for r in self.store.all("SELECT event_id, raw_tx FROM events WHERE status='SENT'"):
-                    self._finalize_event(r["event_id"])
+                    if self._finalize_event(r["event_id"]):
+                        continue
+                    if r["raw_tx"] and time.monotonic() - self._rebroadcast.get(r["event_id"], 0) > 8:
+                        self._rebroadcast[r["event_id"]] = time.monotonic()
+                        self._rebroadcast_tx(r["raw_tx"])           # the same signed transaction, never a new one
                 for a in self.store.all("SELECT * FROM anchors WHERE status='SENT'"):
                     self._finalize_anchor(a)
                     if a["raw_tx"] and time.monotonic() - self._rebroadcast.get(a["anchor_id"], 0) > 8:
                         self._rebroadcast[a["anchor_id"]] = time.monotonic()
                         self._rebroadcast_tx(a["raw_tx"])
+                if time.monotonic() - self._anchor_scan > 10:         # lost anchors: also at start, then every 10 s
+                    self._anchor_scan = time.monotonic()
+                    for r in self.store.all("SELECT event_id, election_id FROM events WHERE status='ACCEPTED' "
+                                            "AND anchor_id IS NULL ORDER BY rowid"):
+                        eid = r["event_id"]
+                        if r["election_id"] in self.anchor_blocked or \
+                                time.monotonic() - self._anchor_queued.get(eid, -1e9) < 30:
+                            continue
+                        self._anchor_queued[eid] = time.monotonic()
+                        self.q.put(("anchor_event", eid))
             except Exception:
                 log.exception("poller")
             self.stop.wait(0.5)
