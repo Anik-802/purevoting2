@@ -21,7 +21,7 @@ def test_signature_matches_frozen_schema_and_raw_eip191_prefix():
     signer = EIP191Signer()
     digest = finding_record_digest("finding", "election", "R2", "FAIL", 3, H("body"))
     signature = signer.sign_digest(digest)
-    common = json.loads((reference_root() / "contracts/common.schema.json").read_text())
+    common = json.loads((reference_root() / "contracts/common.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator(common["$defs"]["Signature"]).validate(signature)
     assert signature["scheme"] == "eip191-secp256k1"
     assert re.fullmatch(r"0x[0-9a-f]{40}", signature["signer"])

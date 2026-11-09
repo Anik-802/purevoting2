@@ -27,7 +27,8 @@ class RuleEngineTests(unittest.TestCase):
         for path in sorted(contract_dir.iterdir()):
             if path.suffix not in {"json", ".json", ".yaml"}:
                 continue
-            document = json.loads(path.read_text()) if path.suffix == ".json" else yaml.safe_load(path.read_text())
+            source = path.read_text(encoding="utf-8")
+            document = json.loads(source) if path.suffix == ".json" else yaml.safe_load(source)
             resource = Resource.from_contents(document, default_specification=DRAFT202012)
             registry = registry.with_resource(path.resolve().as_uri(), resource)
             registry = registry.with_resource("https://purevoting2.local/contracts/" + path.name, resource)
