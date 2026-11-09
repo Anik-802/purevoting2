@@ -49,3 +49,5 @@ against the nodes from the PureChain test kit.
 Items 1 to 9 were approved by the team lead on Nov 2, together with item 10. Checkpoint numbering starts at 0;
 `hasCheckpoint` (stored per election) tells "checkpoint 0 committed" from "no checkpoint yet" and is what
 `submitFindingRecord` will use once it exists.
+
+See `ledger/NETWORK.md` for how to start the validators, peer them and set up the registry (for the compose files).

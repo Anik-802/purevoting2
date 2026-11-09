@@ -1,0 +1,36 @@
+# Slot "ledger-gateway" of docker-compose.integration.yml (Seungmin merges it; the owner of the slot is Harits).
+# Needs, before it starts: validator and pinned nodes, contract deploy and registry setup (not in this snippet yet).
+# GATEWAY_RPC_URL is the Gateway operator's own node (org_neutral). The volume keeps the database across restarts.
+#
+#   ledger-gateway:
+#     profiles: !reset []
+#     build: { context: ., dockerfile: ledger/gateway/Dockerfile }
+#     command: ["python3", "-I", "ledger/gateway/gw_server.py", "--port", "8100", "--host", "0.0.0.0", "--db", "/data/gateway.db"]
+#     environment:
+#       CHAIN_ID: ${CHAIN_ID:?set CHAIN_ID}
+#       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:?set CONTRACT_ADDRESS}
+#       GATEWAY_ACCOUNT_KEY: ${GATEWAY_ACCOUNT_KEY:?set GATEWAY_ACCOUNT_KEY}
+#       GATEWAY_RPC_URL: ${GATEWAY_RPC_URL:?set GATEWAY_RPC_URL}
+#       PINNED_NODE_URL: ${PINNED_NODE_URL:?set PINNED_NODE_URL}
+#       CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}
+#       ANCHOR_BATCH_SECONDS: ${ANCHOR_BATCH_SECONDS:-60}
+#       ANCHOR_BATCH_EVENTS: ${ANCHOR_BATCH_EVENTS:-50}
+#       CORE_KEY: ${CORE_KEY:?set CORE_KEY}
+#       RULE_KEY: ${RULE_KEY:?set RULE_KEY}
+#       AGENT_KEY: ${AGENT_KEY:-}
+#       AUDITOR_KEY: ${AUDITOR_KEY:-}
+#       GATEWAY_KEY: ${GATEWAY_KEY:?set GATEWAY_KEY}
+#       CORE_URL: http://core:8000
+#     volumes:
+#       - ledger-gateway-data:/data
+#     ports:
+#       - "127.0.0.1:${GATEWAY_PORT:-8100}:8100"
+#     healthcheck:
+#       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/v1/health', timeout=3).status == 200 else 1)"]
+#       interval: 10s
+#       timeout: 5s
+#       retries: 6
+#       start_period: 10s
+#
+# and under the top-level "volumes:" key:
+#   ledger-gateway-data:

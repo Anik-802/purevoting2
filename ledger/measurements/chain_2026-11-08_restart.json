@@ -1,0 +1,76 @@
+{
+  "started_at": "2026-11-08 07:50:28",
+  "validators": 3,
+  "A_baseline": {
+    "seconds": 90,
+    "start_head": 389,
+    "end_head": 479,
+    "blocks_gained": 90,
+    "longest_stall_s": 1.1,
+    "stalled_at_end_s": 0.8,
+    "chain": {
+      "blocks": 90,
+      "gap_mean_s": 1,
+      "gap_min_s": 1,
+      "gap_max_s": 1,
+      "in_turn_share": 1.0
+    }
+  },
+  "B_stop": {
+    "port": 8543,
+    "pids": [
+      31214
+    ],
+    "stopped": true
+  },
+  "B_one_down": {
+    "seconds": 60,
+    "start_head": 479,
+    "end_head": 539,
+    "blocks_gained": 60,
+    "longest_stall_s": 1.9,
+    "stalled_at_end_s": 0.8,
+    "chain": {
+      "blocks": 60,
+      "gap_mean_s": 1,
+      "gap_min_s": 1,
+      "gap_max_s": 1,
+      "in_turn_share": 0.33
+    }
+  },
+  "C_stop": {
+    "port": 8542,
+    "pids": [
+      31124
+    ],
+    "stopped": true
+  },
+  "C_two_down": {
+    "seconds": 45,
+    "start_head": 540,
+    "end_head": 540,
+    "blocks_gained": 0,
+    "longest_stall_s": 45.1,
+    "stalled_at_end_s": 45.1
+  },
+  "D_restart": [
+    {
+      "port": 8542,
+      "start_rc": 0,
+      "rpc_up_s": 0.4,
+      "peered_s": 0.5,
+      "chain_resumed_s": 1.4,
+      "caught_up_s": 0.4
+    },
+    {
+      "port": 8543,
+      "start_rc": 0,
+      "rpc_up_s": 0.3,
+      "peered_s": 0.5,
+      "chain_resumed_s": 1.1,
+      "caught_up_s": 13.4
+    }
+  ],
+  "max_observed_reorg_depth": 0,
+  "reorg_events": []
+}

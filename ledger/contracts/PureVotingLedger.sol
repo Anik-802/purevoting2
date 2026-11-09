@@ -57,10 +57,15 @@ contract PureVotingLedger {
     error IndexOutOfRange();
     error InvalidFinalCheckpoint();
     error CloseFinalAlreadyCommitted();
+    error SignatureInvalid();
+    error FindingConflict();
+    error CheckpointNotCommitted();
+    error InvalidFinding();
 
     // ------------------------------------------------------------------ events
     event StateChanged(bytes32 indexed electionId, uint8 status, uint64 coreSeq);
     event AnchorCommitted(bytes32 indexed electionId, bytes32 indexed anchorId, bytes32 merkleRoot, bytes32 rejectionsRoot, uint8 mode, uint32 eventCount);
+    event FindingRecorded(bytes32 indexed findingId, bytes32 indexed electionId, uint8 ruleId, uint8 result, uint64 findingCheckpoint, bytes32 findingHash, bytes signature, string findingIdText, string electionIdText);
     // registry events (additions, for the Gateway's /v1/organizations and setup checks)
     event OrgRegistered(bytes32 indexed orgId, address signer, address registeredBy);
     event RegistryItemSet(uint8 indexed item, bytes32 value, bytes32 operatedBy, uint32 version);
@@ -125,6 +130,30 @@ contract PureVotingLedger {
     }
 
     mapping(bytes32 => Election) private _elections;
+
+    struct Finding {
+        bool exists;
+        bytes32 electionId;
+        bytes32 findingHash;
+        uint8 ruleId;
+        uint8 result;
+        uint64 findingCheckpoint;
+        uint8 status;   // 0 NOT_REQUIRED, 1 PENDING, 2 RESOLVED, 3 SUPERSEDED, 4 CONFIRMED_ISSUE
+    }
+    mapping(bytes32 => Finding) private _findings;
+
+    /// @dev The arguments of submitFindingRecord / relayFindingRecord in memory (keeps the stack small).
+    struct FindingArgs {
+        bytes32 findingId;
+        bytes32 electionId;
+        uint8 ruleId;
+        uint8 result;
+        uint64 findingCheckpoint;
+        bytes32 findingHash;
+        bytes signature;
+        string findingIdText;
+        string electionIdText;
+    }
 
     struct Anchor {
         bytes32 anchorId;
@@ -295,6 +324,20 @@ contract PureVotingLedger {
         emit StateChanged(electionId, ROSTER_FROZEN, coreSeq);
     }
 
+    /// @dev TOKEN_BATCH_ISSUED / TOKEN_REVOKED. Allowed while ROSTER_FROZEN or OPEN. Proposal-bound use
+    /// (TOKEN_REVOKED, TOKEN_REISSUE) needs the proposal logic of week 4, so a non-zero proposalIdOrZero reverts for now.
+    function setTokenSetRoot(bytes32 electionId, bytes32 tokenSetRoot, bytes32 proposalIdOrZero, uint64 coreSeq)
+        external onlyGateway
+    {
+        Election storage e = _get(electionId);
+        if (e.status != ROSTER_FROZEN && e.status != OPEN) revert InvalidStateTransition();
+        if (tokenSetRoot == bytes32(0)) revert ZeroValue();
+        if (proposalIdOrZero != bytes32(0)) revert InvalidStateTransition();
+        _advanceSeq(e, coreSeq);
+        e.tokenSetRoot = tokenSetRoot;
+        emit StateChanged(electionId, e.status, coreSeq);
+    }
+
     function openElection(bytes32 electionId, uint64 coreSeq) external onlyGateway {
         Election storage e = _get(electionId);
         if (e.status != ROSTER_FROZEN) revert InvalidStateTransition();
@@ -398,6 +441,74 @@ contract PureVotingLedger {
         e.resultHash = resultHash;
         e.status = TALLIED;
         emit StateChanged(electionId, TALLIED, coreSeq);
+    }
+
+    // ================================================================== finding records
+    function findingRecord(bytes32 findingId) external view returns (
+        bytes32 electionId, bytes32 findingHash, uint8 ruleId, uint8 result, uint64 findingCheckpoint, uint8 status
+    ) {
+        Finding storage f = _findings[findingId];
+        return (f.electionId, f.findingHash, f.ruleId, f.result, f.findingCheckpoint, f.status);
+    }
+
+    /// @dev Anyone may send it; the Rule Engine's signature is what counts.
+    function submitFindingRecord(
+        bytes32 findingId, bytes32 electionId, uint8 ruleId, uint8 result, uint64 findingCheckpoint,
+        bytes32 findingHash, bytes calldata signature, string calldata findingIdText, string calldata electionIdText
+    ) external {
+        _recordFinding(FindingArgs(findingId, electionId, ruleId, result, findingCheckpoint, findingHash, signature,
+            findingIdText, electionIdText));
+    }
+
+    function relayFindingRecord(
+        bytes32 findingId, bytes32 electionId, uint8 ruleId, uint8 result, uint64 findingCheckpoint,
+        bytes32 findingHash, bytes calldata signature, string calldata findingIdText, string calldata electionIdText
+    ) external onlyGateway {
+        _recordFinding(FindingArgs(findingId, electionId, ruleId, result, findingCheckpoint, findingHash, signature,
+            findingIdText, electionIdText));
+    }
+
+    function _recordFinding(FindingArgs memory a) private {
+        Finding storage f = _findings[a.findingId];
+        if (f.exists) {
+            if (f.findingHash == a.findingHash && f.electionId == a.electionId) return;   // identical: no-op
+            revert FindingConflict();
+        }
+        Election storage e = _get(a.electionId);
+        if (a.ruleId < 1 || a.ruleId > 5 || a.result > 2) revert InvalidFinding();
+        if (sha256(bytes(a.findingIdText)) != a.findingId || sha256(bytes(a.electionIdText)) != a.electionId) {
+            revert InvalidFinding();
+        }
+        if (!e.hasCheckpoint || a.findingCheckpoint > e.lastCheckpoint) revert CheckpointNotCommitted();
+        _checkRuleEngineSignature(sha256(abi.encodePacked(
+            bytes32("PV2-FINDING-v1"), a.findingId, a.electionId, uint256(a.ruleId), uint256(a.result),
+            uint256(a.findingCheckpoint), a.findingHash)), a.signature);
+        f.exists = true;
+        f.electionId = a.electionId;
+        f.findingHash = a.findingHash;
+        f.ruleId = a.ruleId;
+        f.result = a.result;
+        f.findingCheckpoint = a.findingCheckpoint;
+        f.status = a.result == 0 ? 0 : 1;   // PASS needs no review; FAIL / INCONCLUSIVE are PENDING until reviewed
+        emit FindingRecorded(a.findingId, a.electionId, a.ruleId, a.result, a.findingCheckpoint, a.findingHash,
+            a.signature, a.findingIdText, a.electionIdText);
+    }
+
+    /// @dev eip191-secp256k1 (hashing.md): ecrecover over keccak256("\x19Ethereum Signed Message:\n32" || digest).
+    function _checkRuleEngineSignature(bytes32 digest, bytes memory sig) private view {
+        Item storage it = _items[ITEM_RULE_ENGINE];
+        if (!_all(ITEM_RULE_ENGINE) || sig.length != 65) revert SignatureInvalid();
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+        if (v < 27) v += 27;
+        address signer = ecrecover(keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", digest)), v, r, s);
+        if (signer == address(0) || signer != address(uint160(uint256(it.value)))) revert SignatureInvalid();
     }
 
     // ================================================================== internals
