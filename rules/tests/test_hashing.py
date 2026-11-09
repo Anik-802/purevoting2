@@ -151,7 +151,7 @@ def test_leaf_hash_covers_payload_hash_but_excludes_response_metadata():
 
 
 def test_rejection_hash_defaults_missing_subject_and_ignores_unhashed_fields():
-    vector = json.loads((reference_root() / "tests/vectors/hash-vectors.json").read_text())["vectors"]
+    vector = json.loads((reference_root() / "tests/vectors/hash-vectors.json").read_text(encoding="utf-8"))["vectors"]
     rejection = next(item["input"] for item in vector if item["name"] == "rejection_leaf_0")
     absent = {key: value for key, value in rejection.items() if key != "subject_hash"}
     assert rejection_leaf(absent) == rejection_leaf(rejection)
@@ -172,7 +172,7 @@ def test_snapshot_sorts_all_rows_and_preserves_all_columns():
 
 
 def test_config_uses_creation_window_and_normalizes_order_without_mutation():
-    vectors = json.loads((reference_root() / "tests/vectors/hash-vectors.json").read_text())["vectors"]
+    vectors = json.loads((reference_root() / "tests/vectors/hash-vectors.json").read_text(encoding="utf-8"))["vectors"]
     original = next(item["input"] for item in vectors if item["name"] == "config_hash")
     view = copy.deepcopy(original)
     view["candidates"].reverse()
@@ -193,7 +193,7 @@ def test_proposal_and_result_sort_required_lists_and_bind_semantics():
     assert target_hash(proposal) == target_hash(reordered)
     reordered["target"]["remove"] = ["b"]
     assert target_hash(proposal) != target_hash(reordered)
-    vectors = json.loads((reference_root() / "tests/vectors/hash-vectors.json").read_text())["vectors"]
+    vectors = json.loads((reference_root() / "tests/vectors/hash-vectors.json").read_text(encoding="utf-8"))["vectors"]
     original = next(item["input"] for item in vectors if item["name"] == "result_hash")
     reordered_result = copy.deepcopy(original)
     reordered_result["results"].reverse()
@@ -219,14 +219,14 @@ def test_finding_digest_names_match_codes_and_bind_every_field():
 def test_vector_checker_reports_corruption_and_refuses_unknown_or_empty_vectors(tmp_path):
     path = tmp_path / "vectors.json"
     document = {"vectors": [{"name": "H_empty", "input": "", "expected": "wrong"}]}
-    path.write_text(json.dumps(document))
+    path.write_text(json.dumps(document), encoding="utf-8")
     result = verify_vectors(path)[0]
     assert result["passed"] is False
     assert result["actual"] == H("")
     document["vectors"][0]["name"] = "unknown_vector"
-    path.write_text(json.dumps(document))
+    path.write_text(json.dumps(document), encoding="utf-8")
     with pytest.raises(ValueError, match="No independent implementation"):
         verify_vectors(path)
-    path.write_text('{"vectors": []}')
+    path.write_text('{"vectors": []}', encoding="utf-8")
     with pytest.raises(ValueError, match="empty"):
         verify_vectors(path)
