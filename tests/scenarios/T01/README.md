@@ -12,11 +12,28 @@ checkpoint; ELECTION_OPENED sent a few seconds early by the chain clock gets RET
 
 The whole stack must be up with the integration override (nodes, deployed contract and registry, Core, the real
 Gateway and the Rule Engine; no mock profile, `CREATION_CHECK_MODE=node`). Its `staff-setup` step creates the admin
-account from `STAFF_ADMIN_USERNAME` / `STAFF_ADMIN_PASSWORD` in `.env`:
+account from `STAFF_ADMIN_USERNAME` / `STAFF_ADMIN_PASSWORD` in `.env`.
+
+Before the first run on a fresh chain: the nine key lines of `.env` filled (`python3 -I ledger/tools/gen_keys.py --env
+.env`, fresh keys for every deployment) and `CONTRACT_ADDRESS` empty. The bootstrap writes `CHAIN_ID`,
+`CONTRACT_ADDRESS` and `PINNED_NODE_URL` into `.env`; compose reads `.env` only when a command starts, so it runs on
+its own first:
 
 ```sh
+docker compose -f docker-compose.yml -f docker-compose.integration.yml run --rm registry-setup
 docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
 ```
+
+Back up `.env` first (it holds the org keys registered on chain, and the bootstrap rewrites it in place).
+
+Checks before `setup.py` (M1, 11-11):
+- `expected.json` committed;
+- the real chain, not the dev stand-in: no `chain-standin` in `docker compose ... ps`, `CHAIN_ID` in `.env` is
+  PureChain's id and not 20261111, and no stand-in warning in the registry-setup log (a `CONTRACT_ADDRESS` left from
+  the stand-in fails with "no contract code": empty it and run the bootstrap again);
+- every service up: core, ledger-gateway and rule-engine healthy (`/readyz` of Core says `ready`, not
+  `chain_config_missing`), contract-build, registry-setup and staff-setup exited 0;
+- the registry-setup log reads back `ok` for the three orgs, operatorOrg, gatewayAccount and ruleEngineSigner.
 
 Then, from the repository root (needs `httpx` and `pynacl`, e.g. `pip install -r core/requirements.txt`), with that
 account:

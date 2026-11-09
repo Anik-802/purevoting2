@@ -37,10 +37,15 @@ _since: dict[str, dict[str, int]] = {}   # election_id -> {"unreachable": t, "no
 _config_checked: set[str] = set()         # elections whose Gateway /v1/chain was compared
 
 
+def node_config_missing() -> bool:
+    """Node mode without the pinned chain configuration: every creation check would stay PENDING."""
+    return settings.creation_check_mode != "stub" and (not settings.pinned_node_urls or not settings.contract_address)
+
+
 def warn_if_stub() -> None:
     if settings.creation_check_mode == "stub":
         log.warning("CREATION_CHECK_MODE=stub: the creation check always passes (dev only; must be 'node' for T01)")
-    elif not settings.pinned_node_urls or not settings.contract_address:
+    elif node_config_missing():
         log.warning("CREATION_CHECK_MODE=node but PINNED_NODE_URL or CONTRACT_ADDRESS is empty: "
                     "every creation check stays PENDING")
 

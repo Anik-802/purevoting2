@@ -1,17 +1,55 @@
-# Integration stack (week 3 T01 onward), on top of docker-compose.yml:
+# Integration stack (week 3 T01 onward), on top of docker-compose.yml. Compose reads .env once, when a command starts,
+# so the values registry-setup writes there (CHAIN_ID, CONTRACT_ADDRESS, PINNED_NODE_URL) reach the other services only
+# from the next command. On a fresh chain, run the bootstrap first, then the stack:
+#   docker compose -f docker-compose.yml -f docker-compose.integration.yml run --rm registry-setup
 #   docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
+# (registry-setup runs again in `up`: it finds every step done and only rewrites the same three values. Skipping the
+# first command leaves Core not ready with "chain_config_missing" on /readyz.) Back up .env before a bootstrap: it holds
+# the org keys registered on chain, and the job rewrites the file in place.
 # Bootstrap order (docs/system-design.md section 7, #6): nodes → contract deploy → registry setup → staff accounts →
 # Core, Gateway, Rule Engine. Each step that must finish first is a one-shot service the next one depends on.
 # Slots marked OWNER are filled by that owner's compose block (Dockerfile, healthcheck, .env keys); Seungmin merges them.
 # No mock profile here: the Gateway is Harits's ledger-gateway (same service name) and Core reads the pinned nodes.
 services:
-  # OWNER Harits (ledger/): validator nodes, the pinned observer / commission nodes (D-03), contract deploy job
-  # (writes CONTRACT_ADDRESS or uses a deterministic address) and registry setup job (all three org signers,
-  # operatorOrg, ruleEngineSigner, gatewayAccount; PINNED_NODE_URL stays a comma-separated list, contracts v1.1).
-  #
-  # registry-setup:
-  #   ...
-  #   depends_on: { contract-deploy: { condition: service_completed_successfully } }
+  # Validator nodes (D-03; compose block by Seungmin, start command and flags from Harits): node-commission,
+  # node-observer, node-neutral, PureChain 1.13.15-purechain, one per organization, JSON-RPC on 8545 inside the compose
+  # network. Waiting for Harits's flags (genesis and node keys made on a fresh machine and never committed, sealing mode
+  # and period, peering, --http.vhosts). Until then docker-compose.chain-standin.yml (dev only) answers under these
+  # names, or BOOTSTRAP_RPC_URL / BOOTSTRAP_PINNED_NODE_URL point at nodes outside compose. Once the node block is
+  # here, registry-setup depends on the nodes being healthy.
+
+  # Contract build: solc 0.8.28, EVM shanghai, optimizer on with 200 runs (ledger/README.md; without the optimizer the
+  # compile fails with "stack too deep").
+  contract-build:
+    image: ethereum/solc:0.8.28
+    command: ["--optimize", "--optimize-runs", "200", "--evm-version", "shanghai", "--bin", "--overwrite",
+              "-o", "/build", "/src/PureVotingLedger.sol"]
+    volumes:
+      - ./ledger/contracts:/src:ro
+      - chain-build:/build
+    restart: "no"
+
+  # Contract deploy and registry setup (Harits's ledger/tools/setup_registry.py, run by tools/registry_setup_job.sh):
+  # deploys from the neutral org's node account unless .env already has CONTRACT_ADDRESS, registers the three org
+  # signers, confirms operatorOrg, gatewayAccount and ruleEngineSigner, then writes CHAIN_ID, CONTRACT_ADDRESS and
+  # PINNED_NODE_URL into .env (mounted read-write). Keys are read from .env and never printed.
+  registry-setup:
+    image: python:3.11.14-slim   # pinned: this container sees the whole .env
+    entrypoint: ["sh", "/job/registry_setup_job.sh"]
+    environment:
+      BOOTSTRAP_RPC_URL: ${BOOTSTRAP_RPC_URL:-http://node-commission:8545}
+      # observer first, commission second: both run by orgs other than the Gateway operator (D-03, D-26)
+      BOOTSTRAP_PINNED_NODE_URL: ${BOOTSTRAP_PINNED_NODE_URL:-http://node-observer:8545,http://node-commission:8545}
+    volumes:
+      - ./tools/registry_setup_job.sh:/job/registry_setup_job.sh:ro
+      - ./ledger/tools:/ledger/tools:ro
+      - ./ledger/tests:/ledger/tests:ro
+      - chain-build:/build:ro
+      - ${CHAIN_ENV_FILE:-./.env}:/work/chain.env
+    depends_on:
+      contract-build:
+        condition: service_completed_successfully
+    restart: "no"
 
   # Staff accounts (Seungmin): no account API (threat-model O1); an account that exists is left unchanged.
   # T01 logs in with this account (tests/scenarios/T01/README.md: T01_USERNAME / T01_PASSWORD).
@@ -28,7 +66,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      # registry-setup: { condition: service_completed_successfully }   # once Harits's block is merged
+      registry-setup:
+        condition: service_completed_successfully
     restart: "no"
 
   core:
@@ -40,7 +79,9 @@ services:
 
   # OWNER Harits: ledger-gateway (replaces the mock of docker-compose.yml under the same name; port ${GATEWAY_PORT},
   # healthcheck, CORE_KEY / RULE_KEY / AGENT_KEY / GATEWAY_KEY / AUDITOR_KEY, GATEWAY_ACCOUNT_KEY, CHAIN_ID,
-  # CONTRACT_ADDRESS, CONFIRMATION_DEPTH, ANCHOR_BATCH_*), depends on registry-setup.
+  # CONTRACT_ADDRESS, CONFIRMATION_DEPTH, ANCHOR_BATCH_*), depends on registry-setup. CHAIN_ID / CONTRACT_ADDRESS as
+  # ${VAR:-} (refused at start if empty), never ${VAR:?}: they are empty until the bootstrap ran, and a required check
+  # would block the bootstrap command itself.
   #
   # ledger-gateway:
   #   profiles: !reset []
@@ -58,9 +99,11 @@ services:
       GATEWAY_URL: http://ledger-gateway:8100
       RULE_KEY: ${RULE_KEY:?set RULE_KEY}
       RULE_ENGINE_SIGNER_KEY: ${RULE_ENGINE_SIGNER_KEY:?set RULE_ENGINE_SIGNER_KEY}
-      CHAIN_ID: ${CHAIN_ID:?set CHAIN_ID}
-      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:?set CONTRACT_ADDRESS}
-      PINNED_NODE_URL: ${PINNED_NODE_URL:?set PINNED_NODE_URL}
+      # written by registry-setup, so empty on a fresh chain until the bootstrap ran (a required-variable check here would
+      # block the bootstrap command itself); live_chain.py refuses empty or malformed values at start
+      CHAIN_ID: ${CHAIN_ID:-}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
+      PINNED_NODE_URL: ${PINNED_NODE_URL:-}
       CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}
       RULE_POLL_SECONDS: ${RULE_POLL_SECONDS:-60}
       ANCHOR_BATCH_SECONDS: ${ANCHOR_BATCH_SECONDS:-60}
@@ -91,3 +134,4 @@ services:
 
 volumes:
   rules-state:
+  chain-build:

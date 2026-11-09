@@ -76,9 +76,12 @@ def healthz():
 
 @app.get("/readyz")
 def readyz():
-    """Process is up and the database answers."""
+    """Process is up, the database answers and node mode has its chain configuration (a stack started in the same
+    command as the registry-setup bootstrap gets empty values and must not look healthy)."""
     try:
         db.ping()
     except Exception:  # noqa: BLE001 — any failure means not ready; details stay out of the response
         return JSONResponse(status_code=503, content={"status": "db_unavailable"})
+    if creation_check.node_config_missing():
+        return JSONResponse(status_code=503, content={"status": "chain_config_missing"})
     return {"status": "ready"}
