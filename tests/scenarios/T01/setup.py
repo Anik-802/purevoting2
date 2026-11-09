@@ -6,8 +6,9 @@ before the first run; without it the run is recorded but not judged). How to run
 Judged checkpoint C: the checkpoint that commits the last ballot (Core's open checkpoint right after it; if Core
 committed one in between, C is one later, never earlier). Each rule's result at C follows contracts/README.md
 "Review and supersession": a FAIL at C stands; otherwise a PASS at C decides; an INCONCLUSIVE at C counts only until a
-later PASS of the rule (at C or higher) supersedes it. A FAIL at any other checkpoint is also a difference from an
-all-PASS label (FAIL is never superseded).
+later PASS of the rule (at C or higher) supersedes it, except that one with reason OTHER whose summary lists checks
+"not implemented" (rules-ai.md section 8) decides at once and makes the verdict "T01 (partial ...)". A FAIL at any other checkpoint is
+also a difference from an all-PASS label (FAIL is never superseded).
 
 Exit code 0 = as labelled, 1 = differs from the label, 2 = not judged (no label, a partly implemented rule, or not run
 to the end). Tokens, credentials and receipt hashes are never printed or recorded.
@@ -40,6 +41,13 @@ PRESETS = {
 }
 # rules-ai.md section 8: a partly implemented rule lists its unimplemented checks in `summary`
 PARTIAL = re.compile(r"not (yet )?implemented|unimplemented", re.IGNORECASE)
+
+
+def partial(f: dict) -> bool:
+    """INCONCLUSIVE only for unimplemented checks: reason OTHER (the Rule Engine re-runs the checkpoint for the other
+    reasons, and adds the "not implemented" list to every summary of a partly implemented rule)."""
+    return (f.get("result") == "INCONCLUSIVE" and f.get("inconclusive_reason") == "OTHER"
+            and bool(PARTIAL.search(f.get("summary") or "")))
 
 
 class Stop(Exception):
@@ -103,6 +111,10 @@ def at_checkpoint(items: list[dict], rule: str, k: int) -> tuple[str, dict] | No
         later_pass = [f for f in mine if f["result"] == "PASS" and f["checkpoint"] > k]
         if later_pass:
             return "PASS", min(later_pass, key=lambda f: (f["checkpoint"], f["finding_id"]))
+        # a partly implemented rule (rules-ai.md section 8) gives no later PASS: decided, reported as partial
+        unimplemented = [f for f in inconclusive if partial(f)]
+        if unimplemented:
+            return "INCONCLUSIVE", max(unimplemented, key=lambda f: f["finding_id"])
     return None
 
 
@@ -115,6 +127,8 @@ def judge(label: dict, decided: dict, items: list[dict], k: int) -> list[str]:
             out.append(f"{rule}: no decided finding at checkpoint {k} (label {want})")
             continue
         result, f = got
+        if partial(f):
+            continue   # partly implemented: in rec["partial"], verdict "T01 (partial ...)", not compared
         if result != want:
             out.append(f"{rule}: {result} at checkpoint {k} (label {want})")
         nonzero = sorted(n for n, v in (f.get("observed") or {}).items() if isinstance(v, (int, float)) and v)
@@ -219,7 +233,8 @@ def run(a, rec: dict) -> None:
     rec["findings"] = [{n: f.get(n) for n in ("finding_id", "rule_id", "checkpoint", "result", "observed", "summary",
                                               "inconclusive_reason")} for f in state.get("items", [])]
     rec["decided"] = {r: {"result": res, "finding_id": f["finding_id"]} for r, (res, f) in state["decided"].items()}
-    rec["partial"] = sorted(r for r, (_, f) in state["decided"].items() if PARTIAL.search(f.get("summary") or ""))
+    rec["partial"] = sorted(r for r, (_, f) in state["decided"].items() if partial(f) or
+                            (f.get("result") != "INCONCLUSIVE" and PARTIAL.search(f.get("summary") or "")))
     for r in RULES:
         res, f = state["decided"].get(r, ("UNDECIDED", {}))
         log(f"{r} {res} at checkpoint {k}: {(f.get('summary') or '')[:120]}")

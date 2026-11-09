@@ -22,16 +22,6 @@ sys.exit(0 if int(json.load(r)["result"], 16) > 0 else 1)
   sleep 2
 done
 
-if python -I -c '
-import json, sys, urllib.request as u
-body = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_chainId\",\"params\":[]}"
-r = u.urlopen(u.Request(sys.argv[1], body, {"Content-Type": "application/json"}), timeout=3)
-sys.exit(0 if int(json.load(r)["result"], 16) == 20261111 else 1)
-' "$RPC" 2>/dev/null; then
-  echo "WARNING: chain id 20261111 is the DEV STAND-IN (docker-compose.chain-standin.yml), not PureChain." \
-       "Do not use these values for M1 or the demo." >&2
-fi
-
 addr=$(sed -n 's/^CONTRACT_ADDRESS=\(0x[0-9a-fA-F]\{40\}\).*/\1/p' "$ENV_FILE")
 if [ -n "$addr" ]; then
   set -- --contract "$addr"

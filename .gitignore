@@ -9,6 +9,8 @@ node_modules/
 *.log
 # chain data
 ledger/data/
+# purechain-geth binary from the kit (docker-compose.integration.yml PURECHAIN_GETH_BIN), not published here
+ledger/bin/
 ledger/**/chaindata/
 .pytest_cache/
 

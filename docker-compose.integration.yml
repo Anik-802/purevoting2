@@ -8,15 +8,93 @@
 # the org keys registered on chain, and the job rewrites the file in place.
 # Bootstrap order (docs/system-design.md section 7, #6): nodes → contract deploy → registry setup → staff accounts →
 # Core, Gateway, Rule Engine. Each step that must finish first is a one-shot service the next one depends on.
+# Needs the purechain-geth binary of Harits's kit at ledger/bin/purechain-geth (or PURECHAIN_GETH_BIN) and the nine
+# key lines of .env (ledger/tools/gen_keys.py).
 # Slots marked OWNER are filled by that owner's compose block (Dockerfile, healthcheck, .env keys); Seungmin merges them.
 # No mock profile here: the Gateway is Harits's ledger-gateway (same service name) and Core reads the pinned nodes.
+x-purechain-geth: &purechain-geth
+  # purechain-geth v1.0.1 linux-amd64 from Harits's kit, not committed (ledger/bin/ is ignored); chain-init checks its
+  # sha256. A missing file stops compose instead of creating a directory in its place.
+  type: bind
+  source: ${PURECHAIN_GETH_BIN:-./ledger/bin/purechain-geth}
+  target: /usr/local/bin/geth
+  read_only: true
+  bind: { create_host_path: false }
+
+x-validator: &validator
+  image: python:3.11.14-slim   # Debian, for glibc and sh; the node runs only the mounted binary
+  entrypoint: ["sh", "/job/chain_node.sh"]
+  depends_on:
+    chain-init:
+      condition: service_completed_successfully
+  healthcheck:
+    # sealing, peered and the chain moving: newest block at most 15 s old (with three Clique signers one node alone cannot keep
+    # sealing, and blocks come every second, also empty ones)
+    test: ["CMD-SHELL", "test \"$$(geth attach --exec 'eth.mining && net.peerCount >= 1 && eth.blockNumber > 0 && eth.getBlock(eth.blockNumber).timestamp > Date.now() / 1000 - 15' /data/geth.ipc)\" = true"]
+    interval: 5s
+    timeout: 5s
+    retries: 24
+    start_period: 30s
+  stop_grace_period: 30s   # geth flushes its database on SIGTERM
+  restart: unless-stopped
+
 services:
-  # Validator nodes (D-03; compose block by Seungmin, start command and flags from Harits): node-commission,
-  # node-observer, node-neutral, PureChain 1.13.15-purechain, one per organization, JSON-RPC on 8545 inside the compose
-  # network. Waiting for Harits's flags (genesis and node keys made on a fresh machine and never committed, sealing mode
-  # and period, peering, --http.vhosts). Until then docker-compose.chain-standin.yml (dev only) answers under these
-  # names, or BOOTSTRAP_RPC_URL / BOOTSTRAP_PINNED_NODE_URL point at nodes outside compose. Once the node block is
-  # here, registry-setup depends on the nodes being healthy.
+  # Validator nodes (D-03): node-commission, node-observer, node-neutral, PureChain 1.13.15-purechain-1.0.1, one per
+  # organization, Clique with a 1 s period, chain id ${PURECHAIN_CHAIN_ID:-424242}, JSON-RPC on 8545 inside the compose
+  # network. Start flags from Harits (ledger/NETWORK.md); accounts, genesis and node keys are made on this machine by
+  # chain-init and never leave the node volumes. Peering: fixed addresses on the "chain" network and StaticNodes in
+  # each node's config.toml (CHAIN_NET_PREFIX if 172.29.42.0/24 is taken on this host). A fresh chain = remove the
+  # three node volumes and empty CONTRACT_ADDRESS in .env.
+  chain-init:
+    image: python:3.11.14-slim
+    entrypoint: ["python", "-I", "/job/chain_init_job.py"]
+    environment:
+      PURECHAIN_GETH_SHA256: ${PURECHAIN_GETH_SHA256:-a251a17ca6d716d7518c258480c4a7a5380b1003cc4291b68be86d387265db25}
+      PURECHAIN_CHAIN_ID: ${PURECHAIN_CHAIN_ID:-424242}
+      CHAIN_NET_PREFIX: ${CHAIN_NET_PREFIX:-172.29.42}
+    volumes:
+      - ./tools/chain_init_job.py:/job/chain_init_job.py:ro
+      - *purechain-geth
+      - node-commission-data:/nodes/commission
+      - node-observer-data:/nodes/observer
+      - node-neutral-data:/nodes/neutral
+    network_mode: none
+    restart: "no"
+
+  node-commission:
+    <<: *validator
+    environment: { NODE_NAME: PV-Validator-commission, SEAL_AFTER: "0" }   # seals first; tools/chain_node.sh
+    volumes:
+      - ./tools/chain_node.sh:/job/chain_node.sh:ro
+      - *purechain-geth
+      - node-commission-data:/data
+    networks:
+      default: {}
+      chain: { ipv4_address: "${CHAIN_NET_PREFIX:-172.29.42}.11" }
+    ports:
+      - "127.0.0.1:${NODE_RPC_PORT:-8545}:8545"   # for checks from this host only
+
+  node-observer:
+    <<: *validator
+    environment: { NODE_NAME: PV-Validator-observer, SEAL_AFTER: "60" }   # alone after 60 s if commission is down
+    volumes:
+      - ./tools/chain_node.sh:/job/chain_node.sh:ro
+      - *purechain-geth
+      - node-observer-data:/data
+    networks:
+      default: {}
+      chain: { ipv4_address: "${CHAIN_NET_PREFIX:-172.29.42}.12" }
+
+  node-neutral:
+    <<: *validator
+    environment: { NODE_NAME: PV-Validator-neutral, SEAL_AFTER: "120" }
+    volumes:
+      - ./tools/chain_node.sh:/job/chain_node.sh:ro
+      - *purechain-geth
+      - node-neutral-data:/data
+    networks:
+      default: {}
+      chain: { ipv4_address: "${CHAIN_NET_PREFIX:-172.29.42}.13" }
 
   # Contract build: solc 0.8.28, EVM shanghai, optimizer on with 200 runs (ledger/README.md; without the optimizer the
   # compile fails with "stack too deep").
@@ -49,6 +127,9 @@ services:
     depends_on:
       contract-build:
         condition: service_completed_successfully
+      node-commission: { condition: service_healthy }
+      node-observer: { condition: service_healthy }
+      node-neutral: { condition: service_healthy }
     restart: "no"
 
   # Staff accounts (Seungmin): no account API (threat-model O1); an account that exists is left unchanged.
@@ -77,17 +158,41 @@ services:
       staff-setup:
         condition: service_completed_successfully
 
-  # OWNER Harits: ledger-gateway (replaces the mock of docker-compose.yml under the same name; port ${GATEWAY_PORT},
-  # healthcheck, CORE_KEY / RULE_KEY / AGENT_KEY / GATEWAY_KEY / AUDITOR_KEY, GATEWAY_ACCOUNT_KEY, CHAIN_ID,
-  # CONTRACT_ADDRESS, CONFIRMATION_DEPTH, ANCHOR_BATCH_*), depends on registry-setup. CHAIN_ID / CONTRACT_ADDRESS as
-  # ${VAR:-} (refused at start if empty), never ${VAR:?}: they are empty until the bootstrap ran, and a required check
-  # would block the bootstrap command itself.
-  #
-  # ledger-gateway:
-  #   profiles: !reset []
-  #   build: { context: ., dockerfile: ledger/gateway/Dockerfile }
-  #   command: [...]   # set it, or the fake's uvicorn command from docker-compose.yml is inherited
-  #   ...
+  # Ledger Gateway (Harits, ledger/gateway/compose-snippet.yml): replaces the mock of docker-compose.yml under the same
+  # name. It sends through its operator's own node (org_neutral, D-26). CHAIN_ID / CONTRACT_ADDRESS / PINNED_NODE_URL as
+  # ${VAR:-} (the Gateway refuses empty values at start), never ${VAR:?}: they are empty until the bootstrap ran, and a
+  # required check would block the bootstrap command itself. The volume keeps its database across restarts.
+  ledger-gateway:
+    profiles: !reset []
+    build: { context: ., dockerfile: ledger/gateway/Dockerfile }
+    command: ["python3", "-I", "ledger/gateway/gw_server.py", "--port", "8100", "--host", "0.0.0.0", "--db", "/data/gateway.db"]
+    environment:
+      CHAIN_ID: ${CHAIN_ID:-}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
+      GATEWAY_ACCOUNT_KEY: ${GATEWAY_ACCOUNT_KEY:?set GATEWAY_ACCOUNT_KEY}
+      GATEWAY_RPC_URL: http://node-neutral:8545
+      PINNED_NODE_URL: ${PINNED_NODE_URL:-}
+      CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}
+      ANCHOR_BATCH_SECONDS: ${ANCHOR_BATCH_SECONDS:-60}
+      ANCHOR_BATCH_MAX_EVENTS: ${ANCHOR_BATCH_MAX_EVENTS:-50}
+      CORE_KEY: ${CORE_KEY:?set CORE_KEY}
+      RULE_KEY: ${RULE_KEY:?set RULE_KEY}
+      AGENT_KEY: ${AGENT_KEY:-}
+      AUDITOR_KEY: ${AUDITOR_KEY:-}
+      GATEWAY_KEY: ${GATEWAY_KEY:?set GATEWAY_KEY}
+      CORE_URL: http://core:8000
+    volumes:
+      - ledger-gateway-data:/data
+    depends_on:
+      registry-setup: { condition: service_completed_successfully }
+      node-neutral: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/v1/health', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
 
   # Anik: integration only. Part B's base --profile mock stack does not start a Rule Engine.
   rule-engine:
@@ -135,3 +240,14 @@ services:
 volumes:
   rules-state:
   chain-build:
+  node-commission-data:
+  node-observer-data:
+  node-neutral-data:
+  ledger-gateway-data:
+
+networks:
+  # validator p2p on fixed addresses (the StaticNodes of chain-init); the nodes are also on the default network for RPC
+  chain:
+    ipam:
+      config:
+        - subnet: "${CHAIN_NET_PREFIX:-172.29.42}.0/24"

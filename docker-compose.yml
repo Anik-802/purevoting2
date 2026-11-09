@@ -28,7 +28,7 @@ services:
       dockerfile: core/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://pv2_core:${DB_CORE_PASSWORD}@db:5432/${POSTGRES_DB:-purevoting}
-      GATEWAY_URL: http://ledger-gateway:${GATEWAY_PORT:-8100}
+      GATEWAY_URL: http://ledger-gateway:8100   # container port; GATEWAY_PORT is only the host side
       CORE_KEY: ${CORE_KEY:-}
       RULE_KEY: ${RULE_KEY:-}
       AGENT_KEY: ${AGENT_KEY:-}

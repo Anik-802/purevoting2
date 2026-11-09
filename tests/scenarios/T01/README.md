@@ -14,7 +14,9 @@ The whole stack must be up with the integration override (nodes, deployed contra
 Gateway and the Rule Engine; no mock profile, `CREATION_CHECK_MODE=node`). Its `staff-setup` step creates the admin
 account from `STAFF_ADMIN_USERNAME` / `STAFF_ADMIN_PASSWORD` in `.env`.
 
-Before the first run on a fresh chain: the nine key lines of `.env` filled (`python3 -I ledger/tools/gen_keys.py --env
+Before the first run on a fresh chain: the `purechain-geth` v1.0.1 linux-amd64 binary of Harits's kit at
+`ledger/bin/purechain-geth` (not committed; `chain-init` checks its sha256 and makes the three validators, their keys
+and the genesis on this machine), the nine key lines of `.env` filled (`python3 -I ledger/tools/gen_keys.py --env
 .env`, fresh keys for every deployment) and `CONTRACT_ADDRESS` empty. The bootstrap writes `CHAIN_ID`,
 `CONTRACT_ADDRESS` and `PINNED_NODE_URL` into `.env`; compose reads `.env` only when a command starts, so it runs on
 its own first:
@@ -24,15 +26,19 @@ docker compose -f docker-compose.yml -f docker-compose.integration.yml run --rm 
 docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
 ```
 
-Back up `.env` first (it holds the org keys registered on chain, and the bootstrap rewrites it in place).
+Back up `.env` first (it holds the org keys registered on chain, and the bootstrap rewrites it in place). A new chain
+later: `docker compose ... down -v` removes every volume of the project (nodes, database, Gateway and Rule Engine
+state, so all of them restart from nothing together), then empty `CONTRACT_ADDRESS` and run both commands again. The
+kit binary is linux-amd64 only (no ARM host). Another stack on the same host must not use the validator subnet
+(`CHAIN_NET_PREFIX`, default 172.29.42) or the same ports.
 
 Checks before `setup.py` (M1, 11-11):
 - `expected.json` committed;
-- the real chain, not the dev stand-in: no `chain-standin` in `docker compose ... ps`, `CHAIN_ID` in `.env` is
-  PureChain's id and not 20261111, and no stand-in warning in the registry-setup log (a `CONTRACT_ADDRESS` left from
-  the stand-in fails with "no contract code": empty it and run the bootstrap again);
+- the three validators peered: `CHAIN_ID=424242` in `.env`, node-commission, node-observer and node-neutral healthy
+  (each seals, has a peer and the chain moves), and the chain-init log lists three validator addresses; after a
+  restart of the host, Docker or all three nodes this takes up to about 1–2 minutes (`tools/chain_node.sh`);
 - every service up: core, ledger-gateway and rule-engine healthy (`/readyz` of Core says `ready`, not
-  `chain_config_missing`), contract-build, registry-setup and staff-setup exited 0;
+  `chain_config_missing`), chain-init, contract-build, registry-setup and staff-setup exited 0;
 - the registry-setup log reads back `ok` for the three orgs, operatorOrg, gatewayAccount and ruleEngineSigner.
 
 Then, from the repository root (needs `httpx` and `pynacl`, e.g. `pip install -r core/requirements.txt`), with that
@@ -64,7 +70,11 @@ before window_start for the creation check, freeze and link issue; raise it if t
 4. **Judged checkpoint C** = Core's open checkpoint right after the last ballot, i.e. the checkpoint that commits it
    (one later if Core committed one in between, never earlier). Each rule's result at C follows contracts/README.md
    "Review and supersession": a FAIL at C stands; otherwise a PASS at C decides; an INCONCLUSIVE at C waits for a
-   later PASS of the rule (at C or higher). Result and non-zero `observed` keys are compared with `expected.json`;
+   later PASS of the rule (at C or higher), unless it is inconclusive only for unimplemented checks
+   (`inconclusive_reason` OTHER and a `summary` listing checks "not implemented"): that one decides at once and the
+   rule is reported as partial (verdict below), not compared with the label. Other reasons (anchor not deep, node
+   unavailable) keep waiting, since the Rule Engine re-runs that checkpoint. Result and non-zero
+   `observed` keys are compared with `expected.json`;
    a FAIL at any other checkpoint is also a difference (FAIL is never superseded).
    Polling stops once all five rules are decided at C, so a finding recorded later for a higher checkpoint is not
    in the record (the criterion is the next checkpoint).
