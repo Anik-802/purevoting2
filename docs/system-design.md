@@ -306,7 +306,7 @@ finished by 2026-11-30. Milestones, per-owner dates, handoffs and fallbacks are 
 | M3 | 11-26 | Mandatory scope complete (roster amendment, voiding, signed reviews; T01, T02, T04, T05, T08, T15) |
 
 **Mandatory:** normal vote, roster amendment, voiding, rules R1–R5, tests T01, T02, T04, T05, T08, T15.
-**Not built (D-28):** window change, early close, link reissue, direct chain submissions, the remaining tests. AI Audit
+**Not built (D-28):** window change, early close with approval (the close once every voter has voted is built, decisions v1.5), link reissue, direct chain submissions, the remaining tests. AI Audit
 Agent: zero cost only (D-15 v1.2) — a local free model, else a template report, else future work.
 
 ---

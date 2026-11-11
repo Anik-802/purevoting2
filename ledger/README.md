@@ -9,7 +9,8 @@
 | Checkpoints: `commitCheckpoint`, `electionStateAtCheckpoint` | done |
 | Anchors: `commitAnchor`, `anchorCount`, `anchorAt` | done (stage 3a) |
 | `publishTally` (once only; `finalCheckpoint` must be the CLOSE_FINAL checkpoint, T15 d) | done (stage 3a) |
-| Proposals and execution order, early close, `changeWindow`, `amendRoster`, `setTokenSetRoot` | not yet (week 4) |
+| Close once every voter has voted (`closeElection` early with proposalId 0, decisions v1.5) | done (11-11) |
+| Proposals and execution order, early close with a proposal, `changeWindow`, `amendRoster`, `setTokenSetRoot` | not yet (week 4) |
 | Signature checks, finding records and reviews, `finalizeElection`, `voidElection` | not yet (week 2 to 5) |
 
 16 of the 32 interface functions are implemented. Each has the exact selector of the interface

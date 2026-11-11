@@ -80,6 +80,15 @@ def freeze(election_id: str, staff: Staff = Depends(ADMIN)):
     return run_election(election_id, go)
 
 
+@router.post("/v1/elections/{election_id}:close", status_code=202)
+def close(election_id: str, staff: Staff = Depends(ADMIN)):
+    def go(conn, e, now):
+        elections.require_operator_admin(staff, e)
+        elections.close_all_voted(conn, e, now)
+        return elections.to_staff(conn, e)
+    return run_election(election_id, go)
+
+
 @router.post("/v1/elections/{election_id}/tokens:issue")
 def issue_tokens(election_id: str, body: IssueIn, staff: Staff = Depends(ADMIN),
                  idempotency_key: str | None = Header(default=None, min_length=8, max_length=64)):

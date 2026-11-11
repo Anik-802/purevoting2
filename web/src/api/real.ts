@@ -16,7 +16,7 @@ import {
 } from "./types";
 
 /** what this backend can do today; Core's tally / finalize arrive 11-09, opening and closing follow the window */
-export const capabilities = { mode: "real" as const, manualOpenClose: false, tally: true, finalize: true };
+export const capabilities = { mode: "real" as const, manualOpenClose: false, closeWhenAllVoted: true, tally: true, finalize: true };
 
 // demo organizations (docs/system-design.md 2.3); their signer keys come from the on-chain registry, never from here
 const ORG_IDS = (import.meta.env.VITE_ORG_IDS ?? "org_commission,org_neutral,org_observer").split(",");
@@ -195,7 +195,7 @@ export async function issueTokens(id: string): Promise<string> {
   return csv;
 }
 
-type StoredFinding = { finding_id: string; rule_id: Finding["rule_id"]; result: Finding["result"]; checkpoint: number; summary: string; review: { status: string } };
+type StoredFinding = { finding_id: string; rule_id: Finding["rule_id"]; result: Finding["result"]; checkpoint: number; summary: string; inconclusive_reason?: string; review: { status: string } };
 export async function listFindings(id: string): Promise<Finding[]> {
   const { items } = await call<{ items: StoredFinding[] }>("GET", `/v1/elections/${enc(id)}/findings`, { auth: true });
   return items.map((f) => ({
@@ -204,6 +204,7 @@ export async function listFindings(id: string): Promise<Finding[]> {
     result: f.result,
     checkpoint: f.checkpoint,
     summary: f.summary,
+    inconclusive_reason: f.inconclusive_reason,
     reviewed: ["RESOLVED", "SUPERSEDED", "NOT_REQUIRED"].includes(f.review?.status),
     confirmed_issue: f.review?.status === "CONFIRMED_ISSUE", // reviewed, and it blocks finalization
   }));
@@ -213,7 +214,17 @@ const notYet = (what: string) => async (_id: string): Promise<never> => {
   throw new ApiError("NOT_IMPLEMENTED", `${what}은 아직 Core에 없어요 (Core 11-09). 지금은 mock 모드에서만 볼 수 있어요.`);
 };
 export const openElection = notYet("수동 투표 시작");
-export const closeElection = notYet("수동 투표 마감");
+/** decisions v1.5: OPEN → CLOSED before window_end, only once every voter has voted (Core checks live counts) */
+export async function closeElection(id: string): Promise<Election> {
+  try {
+    return await call<Election>("POST", `/v1/elections/${enc(id)}:close`, { auth: true });
+  } catch (err) {
+    // the button follows checkpoint counters (up to a minute old); Core decides on live counts
+    if (err instanceof ApiError && err.code === "INVALID_STATE_TRANSITION")
+      throw new ApiError(err.code, "지금은 마감할 수 없어요. 아직 투표하지 않은 사람이 있거나, 마지막 1분이라 곧 자동으로 마감되거나, 이 배포에서는 조기 마감을 쓰지 않아요.");
+    throw err;
+  }
+}
 export const tally = (id: string) => call<Tally>("POST", `/v1/elections/${enc(id)}/tally`, { auth: true });
 
 /** 202: requested; the election becomes FINALIZED once the Gateway accepts ELECTION_FINALIZED */

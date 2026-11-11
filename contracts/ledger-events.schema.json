@@ -1140,8 +1140,10 @@
             "type": "string",
             "enum": [
               "SCHEDULED",
-              "EARLY"
-            ]
+              "EARLY",
+              "ALL_VOTED"
+            ],
+            "description": "ALL_VOTED (decisions v1.5): admin close once every ACTIVE voter has a non-revoked token, every such token is used and every credential has a ballot; no proposal; closed_at = floor_to_bucket(occurred_at) + time_bucket_seconds < window_end"
           },
           "closed_at": {
             "$ref": "common.schema.json#/$defs/Timestamp",

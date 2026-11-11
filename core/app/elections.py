@@ -209,6 +209,35 @@ def freeze(conn, e: dict, now: int) -> None:
     lifecycle.commit_checkpoint(conn, e, "STATE_CHANGE", now)
 
 
+def close_all_voted(conn, e: dict, now: int) -> None:
+    """OPEN → CLOSED before window_end once every voter has voted (decisions v1.5, no proposal): every ACTIVE voter
+    has a non-revoked token, every such token is USED and every registered credential has a ballot, so nobody can
+    lose a vote. closed_at is the bucket boundary after now, so every accepted voter event has
+    occurred_at + bucket <= closed_at (R2); in the last bucket that boundary is window_end and the scheduled close
+    follows within one bucket, so the request is refused (closedAt < windowEnd on chain)."""
+    if e["status"] == "CLOSED":
+        return   # retry-safe
+    if e["status"] != "OPEN":
+        raise Refused(409, "INVALID_STATE_TRANSITION")
+    if not settings.all_voted_close:
+        raise Refused(409, "INVALID_STATE_TRANSITION", "ALL_VOTED_CLOSE is off in this deployment")
+    eid = e["election_id"]
+    tokens, used = conn.execute(text(
+        "SELECT count(*), count(used_checkpoint) FROM credential.token_status "
+        "WHERE election_id = :e AND revoked_checkpoint IS NULL"), {"e": eid}).one()
+    credentials = conn.execute(text("SELECT count(*) FROM ballot.credential_issuance WHERE election_id = :e"),
+                               {"e": eid}).scalar_one()
+    ballots = conn.execute(text("SELECT count(*) FROM ballot.ballot_receipts WHERE election_id = :e"),
+                           {"e": eid}).scalar_one()
+    if not tokens or used != tokens or ballots != credentials or not lifecycle.all_voters_have_tokens(conn, eid):
+        raise Refused(409, "INVALID_STATE_TRANSITION", f"not everyone has voted ({ballots} of {tokens} ballots)")
+    b = e["time_bucket_seconds"]
+    closed_at = timeutil.floor_bucket(now, b) + b
+    if closed_at >= e["window_end"]:
+        raise Refused(409, "INVALID_STATE_TRANSITION", "last bucket: the scheduled close at window_end comes first")
+    lifecycle.close(conn, e, closed_at, "ALL_VOTED", now)
+
+
 def issue_tokens(conn, e: dict, now: int) -> tuple[list[dict], int]:
     """Issue one token per ACTIVE voter without a non-revoked token. Returns (CSV rows, batch_no or 0)."""
     if e["status"] not in ("ROSTER_FROZEN", "OPEN") or e["creation_check"] != "PASSED":

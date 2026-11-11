@@ -350,18 +350,28 @@ contract PureVotingLedger {
         emit StateChanged(electionId, OPEN, coreSeq);
     }
 
-    /// @dev Only the scheduled close is implemented. The early close needs proposals (planned week 4).
+    /// @dev The scheduled close, and the close once every voter has voted (ELECTION_CLOSED ALL_VOTED, decisions v1.5):
+    ///      early with proposalId 0, closedAt on a bucket boundary before windowEnd; the contract cannot see turnout,
+    ///      R4 is to check it. The early close with a proposal (ELECTION_CLOSE_EARLY) needs proposals (planned week 4).
     function closeElection(
-        bytes32 electionId, uint64 closedAt, bool early, bytes32 /* proposalId */, uint64 /* requestedClosedAt */,
+        bytes32 electionId, uint64 closedAt, bool early, bytes32 proposalId, uint64 /* requestedClosedAt */,
         uint64 /* executedAt */, uint64 coreSeq
     ) external onlyGateway {
         Election storage e = _get(electionId);
-        if (early) revert EarlyCloseNotImplemented();
+        if (early && proposalId != bytes32(0)) revert EarlyCloseNotImplemented();
         if (e.status != OPEN) revert InvalidStateTransition();
-        // assumption: a scheduled close happens at the current effective end
-        if (closedAt != e.windowEnd) revert InvalidStateTransition();
+        if (early) {
+            if (closedAt <= e.windowStart || closedAt >= e.windowEnd || closedAt % e.timeBucketSeconds != 0) {
+                revert InvalidStateTransition();
+            }
+        } else if (closedAt != e.windowEnd) {
+            // assumption: a scheduled close happens at the current effective end
+            revert InvalidStateTransition();
+        }
         if (block.timestamp < closedAt) revert TimeNotReached();
         _advanceSeq(e, coreSeq);
+        // the effective end: later snapshots and the batched-anchor bound use it (unchanged for a scheduled close)
+        e.windowEnd = closedAt;
         e.status = CLOSED;
         emit StateChanged(electionId, CLOSED, coreSeq);
     }

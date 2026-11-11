@@ -97,6 +97,9 @@ interface IPureVotingLedger {
     function openElection(bytes32 electionId, uint64 coreSeq) external;   // block time >= windowStart (else TIME_NOT_REACHED, see below)
     function closeElection(bytes32 electionId, uint64 closedAt, bool early, bytes32 proposalId, uint64 requestedClosedAt,
         uint64 executedAt, uint64 coreSeq) external;                // early: proposal APPROVED+executed, closedAt formula
+        // ELECTION_CLOSED(ALL_VOTED) (decisions v1.5): early=true with proposalId = 0, closedAt bucket-aligned and
+        // < windowEnd, block time >= closedAt (else TIME_NOT_REACHED); windowEnd becomes closedAt (effective end). The
+        // contract cannot see turnout, so R4 is to check the all-voted condition from the CLOSE_FINAL checkpoint counts (R4 check not implemented yet, Anik)
     function openProposal(bytes32 proposalId, bytes32 actionId, bytes32 electionId, uint8 actionType, bytes32 targetHash,
         bytes32 requestingOrgId, bytes calldata requestSignature) external;
         // expiresAt = block time + proposalTtlHours (stored by the contract); decisions after expiresAt are refused and the

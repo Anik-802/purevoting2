@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     creation_check_mode: str = "node"
     # base of the one-time links: <voter_web_url>/vote/<election_id>#t=<token>
     voter_web_url: str = "http://127.0.0.1:3000"
+    # decisions v1.5 close once every voter has voted; off unless chosen (docker-compose.yml turns it on for the fake
+    # Gateway; the integration stack needs a contract deployed from this version, then ALL_VOTED_CLOSE=true)
+    all_voted_close: bool = False
     # background loops (scheduler, outbox worker); tests drive them by hand
     run_workers: bool = True
 

@@ -40,6 +40,7 @@ services:
       CONFIRMATION_DEPTH: ${CONFIRMATION_DEPTH:-2}   # D-27; Gateway and Rule Engine blocks pass it too
       CREATION_CHECK_MODE: ${CREATION_CHECK_MODE:-node}   # reads the pinned node; "stub" (dev only) assumes it matches
       VOTER_WEB_URL: ${VOTER_WEB_URL:-http://127.0.0.1:3000}   # the Funnel address when published (D-29)
+      ALL_VOTED_CLOSE: ${ALL_VOTED_CLOSE:-true}   # decisions v1.5 (fake Gateway); the integration override defaults to false
     depends_on:
       db:
         condition: service_healthy

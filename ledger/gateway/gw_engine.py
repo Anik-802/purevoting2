@@ -1,7 +1,7 @@
 """Core of the Ledger Gateway: event intake, contract writes, confirmation, rejections and anchors.
 
 M1 scope (docs/schedule.md, Mon 11-09): ELECTION_CREATED, ROSTER_FROZEN, TOKEN_BATCH_ISSUED, ELECTION_OPENED,
-ELECTION_CLOSED (scheduled), CHECKPOINT_COMMITTED, TALLY_PUBLISHED; voter events TOKEN_USED and BALLOT_RECEIVED with
+ELECTION_CLOSED (scheduled, all voted), CHECKPOINT_COMMITTED, TALLY_PUBLISHED; voter events TOKEN_USED and BALLOT_RECEIVED with
 window / duplicate checks and shuffled Merkle batches. Everything else is answered REJECTED with the detail
 "not implemented in M1". Temporary choices are listed in ledger/DECISIONS.md.
 
@@ -412,6 +412,8 @@ class Engine:
         if t == "ELECTION_CLOSED":
             if p["reason"] == "SCHEDULED":
                 return "closeElection", [el, to_unix(p["closed_at"]), False, ZERO32, 0, 0, seq]
+            if p["reason"] == "ALL_VOTED":   # decisions v1.5: no proposal
+                return "closeElection", [el, to_unix(p["closed_at"]), True, ZERO32, 0, 0, seq]
             return "closeElection", [el, to_unix(p["closed_at"]), True, gw_abi.idh(p["proposal_id"]),
                                      to_unix(p["requested_closed_at"]), 0, seq]
         if t == "CHECKPOINT_COMMITTED":

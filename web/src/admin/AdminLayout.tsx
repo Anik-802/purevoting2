@@ -22,7 +22,7 @@ export default function AdminLayout() {
       </div>
       <header className="border-b border-line bg-white">
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-4 px-4 sm:gap-10 sm:px-6">
-          <Link to="/admin" className="flex items-center gap-2">
+          <Link to="/" className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-[15px] font-black text-white">P</span>
             <span className="hidden leading-tight sm:block">
               <span className="block text-[17px] font-bold">PureVoting</span>

@@ -154,6 +154,9 @@ services:
   core:
     environment:
       CREATION_CHECK_MODE: node            # T01 needs the direct node read (core-web.md: the stub is removed for T01)
+      # decisions v1.5: needs a contract deployed from this version (an older one rejects ELECTION_CLOSED(ALL_VOTED) and the
+      # election stays CLOSED in Core but OPEN on chain); set ALL_VOTED_CLOSE=true in .env after such a deployment
+      ALL_VOTED_CLOSE: ${ALL_VOTED_CLOSE:-false}
     depends_on:
       staff-setup:
         condition: service_completed_successfully

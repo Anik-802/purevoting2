@@ -162,7 +162,8 @@ check("lastCheckpoint", c.call("electionState", E)[8], 3)
 check("never committed checkpoint reads zeros", c.call("electionStateAtCheckpoint", E, 2)[1], 0)
 rev("checkpoint 2 after 3", c.send("commitCheckpoint", E, 2, 0, idh("t"), 6, sender=GW), "CheckpointNotIncreasing")
 
-rev("early close is not implemented yet", c.send("closeElection", E, END, True, ZERO, 0, 0, 6, sender=GW), "EarlyCloseNotImplemented")
+rev("early close with a proposal is not implemented yet", c.send("closeElection", E, END - 5, True, idh("proposal"), END - 5, 0, 6, sender=GW), "EarlyCloseNotImplemented")
+rev("all-voted close at the window end", c.send("closeElection", E, END, True, ZERO, 0, 0, 6, sender=GW), "InvalidStateTransition")
 rev("close at a time other than the window end", c.send("closeElection", E, END - 5, False, ZERO, 0, 0, 6, sender=GW), "InvalidStateTransition")
 rev("close before the window end", c.send("closeElection", E, END, False, ZERO, 0, 0, 6, sender=GW), "TimeNotReached")
 wait_block_time(ports[0], END)
@@ -225,6 +226,28 @@ ok("create B (window already over)", create(eid=B, start=tb - 20, end=tb - 10, s
 ok("freeze B", c.send("freezeRoster", B, RH, 2, sender=GW))
 rev("open B after its window", c.send("openElection", B, 3, sender=GW), "InvalidStateTransition")
 rev("tally of a ROSTER_FROZEN election", c.send("publishTally", B, idh("result-1"), 1, 3, sender=GW), "InvalidStateTransition")
+
+# close once every voter has voted (ELECTION_CLOSED ALL_VOTED, decisions v1.5): early with proposalId 0
+D = idh("election-D")
+DS = (block_time(ports[0]) // 5 + 2) * 5                 # bucket-aligned
+DE, CA = DS + 40, DS + 25
+ok("create D", create(eid=D, start=DS, end=DE, seq=1))
+ok("freeze D", c.send("freezeRoster", D, RH, 2, sender=GW))
+wait_block_time(ports[0], DS)
+ok("open D", c.send("openElection", D, 3, sender=GW))
+rev("all-voted close off a bucket boundary", c.send("closeElection", D, CA + 1, True, ZERO, 0, 0, 4, sender=GW), "InvalidStateTransition")
+rev("all-voted close at the window start", c.send("closeElection", D, DS, True, ZERO, 0, 0, 4, sender=GW), "InvalidStateTransition")
+rev("all-voted close at the window end", c.send("closeElection", D, DE, True, ZERO, 0, 0, 4, sender=GW), "InvalidStateTransition")
+rev("all-voted close before closedAt", c.send("closeElection", D, CA, True, ZERO, 0, 0, 4, sender=GW), "TimeNotReached")
+wait_block_time(ports[0], CA)
+ok("all-voted close", c.send("closeElection", D, CA, True, ZERO, 0, 0, 4, sender=GW))
+st = c.call("electionState", D)
+check("all-voted close: CLOSED, windowEnd = closedAt", [st[0], st[2]], [3, CA])
+rev("batched anchor beyond the effective end", c.send("commitAnchor", D, idh("anc-d1"), R1, RJ, 1, 3, DS, CA - 4, sender=GW), "AnchorBeyondWindowEnd")
+ok("batched anchor up to the effective end", c.send("commitAnchor", D, idh("anc-d1"), R1, RJ, 1, 3, DS, CA - 5, sender=GW))
+ok("D: commitCheckpoint 0 (CLOSE_FINAL)", c.send("commitCheckpoint", D, 0, 2, idh("d-tables-0"), 5, sender=GW))
+check("CLOSE_FINAL snapshot holds the effective end", c.call("electionStateAtCheckpoint", D, 0)[:2], [3, CA])
+ok("tally after an all-voted close", c.send("publishTally", D, RES, 0, 6, sender=GW))
 
 # a registry change makes the gateway ineffective again until everyone re-confirms
 ok("setGatewayAccount (re-register)", c.send("setGatewayAccount", GW, sender=NEU))

@@ -937,3 +937,102 @@ def test_create_with_gateway_down_is_503_and_retryable(env):
     r = c.post("/v1/elections", headers=headers, json=body)
     assert r.status_code == 201, r.text
     assert c.post("/v1/elections", headers=headers, json=body).json()["election_id"] == r.json()["election_id"]
+
+
+def test_close_when_all_voted(env):
+    """decisions v1.5: the admin closes before window_end once every token is used and every credential has a ballot."""
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    start, end = t0 + 10 * B, t0 + 20 * B
+    eid = c.post("/v1/elections", headers=auth, json={
+        "title": "All voted", "window_start": iso(start), "window_end": iso(end),
+        "time_bucket_seconds": B, "checkpoint_interval_seconds": B, "candidates": [{"name": "Kim"}],
+        "org_ids": ["org_commission", "org_neutral", "org_observer"], "approval_threshold": 2}).json()["election_id"]
+    c.put(f"/v1/elections/{eid}/roster", headers=auth,
+          json={"voters": [{"external_ref": f"a{i}", "name": "n"} for i in range(3)]})
+    clock.frozen = t0 + B
+    deliver_until_idle(eid)
+    assert c.post(f"/v1/elections/{eid}:close", headers=auth).json()["code"] == "INVALID_STATE_TRANSITION"  # DRAFT
+    assert c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth).status_code == 202
+    lines = c.post(f"/v1/elections/{eid}/tokens:issue", headers=auth, json={"delivery": "CSV"}).text.strip().splitlines()
+    tokens = [ln.rsplit("#t=", 1)[1] for ln in lines[1:]]
+    clock.frozen = start
+    scheduler_tick([eid])
+    deliver_until_idle(eid)
+    pub = c.get(f"/v1/public/elections/{eid}").json()
+    box = nacl.public.SealedBox(nacl.public.PublicKey(base64.b64decode(pub["public_key"])))
+    sealed = base64.b64encode(box.encrypt(json.dumps({"candidate_id": pub["candidates"][0]["candidate_id"]}).encode()))
+
+    def close():
+        return c.post(f"/v1/elections/{eid}:close", headers=auth)
+
+    settings.all_voted_close = True                            # docker-compose.yml turns it on for the fake Gateway
+
+    clock.frozen = start + 2 * B + 7
+    creds = []
+    for tok in tokens:
+        cred = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode()
+        assert c.post("/v1/credentials:redeem", json={"election_id": eid, "token": tok,
+                                                      "nullifier_hash": hashing.H(cred)}).status_code == 200
+        creds.append(cred)
+        assert close().status_code == 409                       # a token unused, or a credential without a ballot
+    for i, cred in enumerate(creds):
+        assert c.post("/v1/ballots", json={"election_id": eid, "credential": cred,
+                                           "sealed_ballot": sealed.decode()}).status_code == 201
+        if i < len(creds) - 1:
+            assert close().status_code == 409
+    settings.all_voted_close = False                           # a Gateway that cannot record ALL_VOTED yet
+    try:
+        assert close().status_code == 409
+    finally:
+        settings.all_voted_close = True
+    with db.get_engine().begin() as conn:                      # an ACTIVE voter without a link (a later amendment)
+        conn.execute(text("INSERT INTO credential.roster (election_id, voter_key, name, external_ref, added_checkpoint) "
+                          "VALUES (:e, 'vtr_ZZZZZZZZZZZZZZZZZZZZZZZZZZ', 'n', 'late', 0)"), {"e": eid})
+    assert close().status_code == 409
+    with db.get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM credential.roster WHERE voter_key = 'vtr_ZZZZZZZZZZZZZZZZZZZZZZZZZZ'"))
+    clock.frozen = start + 3 * B                               # exactly on a boundary: closed_at is the next one
+    r = close()
+    assert r.status_code == 202 and r.json()["status"] == "CLOSED"
+    assert close().status_code == 202                           # retry-safe
+    events = [r["event"] for r in outbox_rows(eid) if r["kind"] == "system"]
+    closed = next(ev for ev in events if ev["type"] == "ELECTION_CLOSED")
+    assert closed["payload"] == {"reason": "ALL_VOTED", "closed_at": iso(start + 4 * B)}
+    reasons = [ev["payload"]["reason"] for ev in events if ev["type"] == "CHECKPOINT_COMMITTED"]
+    assert reasons[-2:] == ["STATE_CHANGE", "CLOSE_FINAL"]
+    redeem = c.post("/v1/credentials:redeem", json={"election_id": eid, "token": tokens[0], "nullifier_hash": "2" * 64})
+    assert redeem.json()["code"] == "ELECTION_NOT_OPEN"
+    clock.frozen = start + 5 * B
+    deliver_until_idle(eid)
+    assert c.post(f"/v1/elections/{eid}/tally", headers=auth).status_code == 200
+    settings.all_voted_close = False
+
+
+def test_close_when_all_voted_refused_in_last_bucket(env):
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    start, end = t0 + 10 * B, t0 + 12 * B
+    eid = c.post("/v1/elections", headers=auth, json={
+        "title": "Last bucket", "window_start": iso(start), "window_end": iso(end),
+        "time_bucket_seconds": B, "checkpoint_interval_seconds": B, "candidates": [{"name": "Kim"}],
+        "org_ids": ["org_commission", "org_neutral", "org_observer"], "approval_threshold": 2}).json()["election_id"]
+    c.put(f"/v1/elections/{eid}/roster", headers=auth, json={"voters": [{"external_ref": "z", "name": "n"}]})
+    clock.frozen = t0 + B
+    deliver_until_idle(eid)
+    c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth)
+    tok = c.post(f"/v1/elections/{eid}/tokens:issue", headers=auth, json={"delivery": "CSV"}).text.strip()         .splitlines()[1].rsplit("#t=", 1)[1]
+    clock.frozen = start
+    scheduler_tick([eid])
+    deliver_until_idle(eid)
+    pub = c.get(f"/v1/public/elections/{eid}").json()
+    box = nacl.public.SealedBox(nacl.public.PublicKey(base64.b64decode(pub["public_key"])))
+    clock.frozen = end - 10                                    # last bucket: closed_at would be window_end
+    cred = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode()
+    c.post("/v1/credentials:redeem", json={"election_id": eid, "token": tok, "nullifier_hash": hashing.H(cred)})
+    sealed = box.encrypt(json.dumps({"candidate_id": pub["candidates"][0]["candidate_id"]}).encode())
+    assert c.post("/v1/ballots", json={"election_id": eid, "credential": cred,
+                                       "sealed_ballot": base64.b64encode(sealed).decode()}).status_code == 201
+    settings.all_voted_close = True
+    try:
+        assert c.post(f"/v1/elections/{eid}:close", headers=auth).status_code == 409
+    finally:
+        settings.all_voted_close = False

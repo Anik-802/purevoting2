@@ -43,6 +43,7 @@ export interface Finding {
   result: RuleResult;
   checkpoint: number;
   summary: string;
+  inconclusive_reason?: string;
   reviewed?: boolean;
   confirmed_issue?: boolean;
 }

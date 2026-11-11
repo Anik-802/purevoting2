@@ -14,7 +14,7 @@ import {
 } from "./types";
 
 /** what this backend can do: everything, in memory */
-export const capabilities = { mode: "mock" as "mock" | "real", manualOpenClose: true, tally: true, finalize: true };
+export const capabilities = { mode: "mock" as "mock" | "real", manualOpenClose: true, closeWhenAllVoted: false, tally: true, finalize: true };
 
 const wait = (ms = 350) => new Promise((r) => setTimeout(r, ms));
 const hex = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -264,9 +264,11 @@ export async function openElection(id: string) {
   find(id).status = "OPEN";
 }
 
-export async function closeElection(id: string) {
+export async function closeElection(id: string): Promise<Election> {
   await wait();
-  find(id).status = "CLOSED";
+  const e = find(id);
+  e.status = "CLOSED";
+  return { ...e };
 }
 
 export async function tally(id: string): Promise<Tally> {

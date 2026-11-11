@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import type { Election, ElectionStatus, Finding, Tally } from "../api/types";
 import { Button, Card, ResultBadge, Spinner, StatusBadge, fmtDate } from "../ui";
+import { RULE_NAME, findingKo } from "./findingText";
 import { LinkDeliveryCard, RosterCard } from "./RosterSteps";
 
 const FLOW: [ElectionStatus, string][] = [
@@ -197,22 +198,98 @@ export default function ElectionDetail() {
               </tr>
             </thead>
             <tbody>
-              {findings.map((f) => (
-                <tr key={f.finding_id} className={`border-b border-line last:border-0 ${f.result === "FAIL" ? "bg-danger-soft/40" : ""}`}>
-                  <td className="px-6 py-3.5 font-bold">{f.rule_id}</td>
-                  <td className="py-3.5">
-                    <ResultBadge result={f.result} />
-                    {f.confirmed_issue && <span className="ml-2 text-[12px] font-bold text-danger">문제 확정</span>}
-                  </td>
-                  <td className="py-3.5 text-ink-3">{f.checkpoint}</td>
-                  <td className="px-6 py-3.5 text-ink-2">{f.summary}</td>
-                </tr>
+              {latestPerRule(findings).map(({ f, earlierFails }) => (
+                <FindingRow key={f.finding_id} f={f} note={earlierFails ? `이전 체크포인트에서 FAIL ${earlierFails}건 (FAIL은 나중 결과로 지워지지 않아요)` : ""} />
               ))}
             </tbody>
           </table>
+          {findings.length > 5 && (
+            <details className="border-t border-line">
+              <summary className="cursor-pointer px-6 py-3 text-[13px] font-semibold text-ink-3">
+                이전 기록 보기 (체크포인트마다 다시 검사한 기록 {findings.length}건)
+              </summary>
+              <table className="w-full min-w-[560px] text-left text-[14px]">
+                <tbody>
+                  {[...findings].sort((a, b) => b.checkpoint - a.checkpoint || a.rule_id.localeCompare(b.rule_id)).map((f) => (
+                    <FindingRow key={f.finding_id} f={f} note="" />
+                  ))}
+                </tbody>
+              </table>
+            </details>
+          )}
           </div>
         )}
       </Card>
+    </>
+  );
+}
+
+/** decisions v1.5: early close without approval once every link was used and every voter cast a ballot. The counters
+ * are as of the last checkpoint (about a minute old); Core checks the live counts. */
+function CloseWhenAllVoted({ e, busy, run }: { e: Election; busy: boolean; run: (fn: () => Promise<unknown>, ok: string) => void }) {
+  const { tokens_active, tokens_used, ballots_received } = e.counters;
+  const allVoted = tokens_active > 0 && tokens_used === tokens_active && ballots_received === tokens_active;
+  return (
+    <>
+      <Button variant="secondary" className="w-full" disabled={busy || !allVoted}
+        onClick={() => run(() => api.closeElection(e.election_id), "모든 유권자가 투표해서 투표를 마감했어요")}>
+        투표 마감 (전원 투표 완료)
+      </Button>
+      {!allVoted && (
+        <p className="text-[13px] text-ink-4">
+          모든 유권자가 투표하면 종료 시각 전에 마감할 수 있어요. 지금 {ballots_received}/{tokens_active}명 투표 (1분마다 갱신)
+        </p>
+      )}
+    </>
+  );
+}
+
+/** The Rule Engine re-checks R1–R5 at every checkpoint and records each result, so the list grows by five per
+ * checkpoint. Show the latest result of each rule (a FAIL first at the same checkpoint) and count earlier FAILs,
+ * which later results never supersede (contracts README "Review and supersession"). */
+function latestPerRule(findings: Finding[]) {
+  const rules = [...new Set(findings.map((f) => f.rule_id))].sort();
+  return rules.map((rule) => {
+    const mine = findings.filter((f) => f.rule_id === rule);
+    const f = mine.reduce((a, b) => (b.checkpoint > a.checkpoint || (b.checkpoint === a.checkpoint && b.result === "FAIL") ? b : a));
+    return { f, earlierFails: mine.filter((x) => x !== f && x.result === "FAIL").length };
+  });
+}
+
+function FindingRow({ f, note }: { f: Finding; note: string }) {
+  return (
+    <tr className={`border-b border-line last:border-0 ${f.result === "FAIL" ? "bg-danger-soft/40" : ""}`}>
+      <td className="px-6 py-3.5 font-bold">
+        {f.rule_id}
+        <span className="block text-[12px] font-medium text-ink-4">{RULE_NAME[f.rule_id]}</span>
+      </td>
+      <td className="py-3.5">
+        <ResultBadge result={f.result} />
+        {f.confirmed_issue && <span className="ml-2 text-[12px] font-bold text-danger">문제 확정</span>}
+      </td>
+      <td className="py-3.5 text-ink-3">{f.checkpoint}</td>
+      <td className="px-6 py-3.5 text-ink-2">
+        <FindingText f={f} />
+        {note && <span className="mt-1 block text-[12px] font-semibold text-danger">{note}</span>}
+      </td>
+    </tr>
+  );
+}
+
+function FindingText({ f }: { f: Finding }) {
+  const { text, missing } = findingKo(f);
+  return (
+    <>
+      {text}
+      {missing.length > 0 && (
+        <ul className="mt-1 list-disc pl-5 text-[13px] text-ink-3">
+          {missing.map((m) => <li key={m}>{m}</li>)}
+        </ul>
+      )}
+      <details className="mt-1 text-[12px] text-ink-4">
+        <summary className="cursor-pointer">원문 (규칙 엔진이 서명한 영어 문장)</summary>
+        <p className="mt-1 break-words">{f.summary}</p>
+      </details>
     </>
   );
 }
@@ -258,6 +335,7 @@ function NextAction({ e, busy, run }: { e: Election; busy: boolean; run: (fn: ()
       return (
         <div className="space-y-3">
           <p className="text-[14px] text-ink-3">투표가 진행 중이에요. 종료 시각({fmtDate(e.window_end)})이 되면 자동으로 마감돼요.</p>
+          {api.capabilities.closeWhenAllVoted && <CloseWhenAllVoted e={e} busy={busy} run={run} />}
           {api.capabilities.manualOpenClose && (
             <Button variant="ghost" className="w-full" disabled={busy} onClick={() => run(() => api.closeElection(id), "투표를 마감했어요")}>
               투표 마감 (데모)

@@ -1,4 +1,4 @@
-# Design decisions (v1.4)
+# Design decisions (v1.5)
 
 > 2026-10-18 v1.0: after a supervisor review (DECISIONS VERDICT: READY TO CONFIRM) every item except D-02 and D-15 is
 > **confirmed as recommended**. Wording added at confirmation is marked **Confirmed note (v1.0)**. D-02 is delegated to
@@ -21,6 +21,9 @@
 > 2026-11-11 v1.4: D-10 — the sizing rule is no longer enforced (a small roster must still be able to vote): no
 > BUCKET_TOO_SMALL at roster freeze; the web fixes the bucket at 60 s and no longer offers a choice. The residual risk
 > is disclosed (threat model S1).
+> 2026-11-11 v1.5: D-11 exception — once every voter has voted (every ACTIVE voter has a token, every token used, every
+> credential has a ballot; not in the last bucket) the operator admin may close before window_end without a proposal (ELECTION_CLOSED reason ALL_VOTED); no
+> voter can lose a vote; R4 is to re-check the condition (not implemented yet, Anik). Team-lead decision.
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -38,7 +41,7 @@
 | D-08 | Ballot encryption | Sealed with the election public key (libsodium sealed box), decrypted after closing | Seungmin | Confirmed |
 | D-09 | Lost link / credential | **A used link is never re-enabled.** Only a lost unused link is reissued after approval (TOKEN_REISSUE, optional). A lost credential = abstention | Seungmin | Confirmed |
 | D-10 | Voter-side time precision | Ledger and views keep only bucketed times and checkpoint numbers (bucket 60 s in the web, not enforced per roster size since v1.4); window bounds aligned to buckets | Seungmin, Harits, Anik | Confirmed (v1.4 change) |
-| D-11 | Approvals | Roster amendment, link reissue, window change, early close, void: approval by **threshold** orgs other than the requester, each signing with its own key; signatures verified on chain | Harits, Seungmin | Confirmed |
+| D-11 | Approvals | Roster amendment, link reissue, window change, early close, void: approval by **threshold** orgs other than the requester, each signing with its own key; signatures verified on chain (v1.5: no approval for a close once every voter has voted) | Harits, Seungmin | Confirmed (v1.5 exception) |
 | D-12 | Core ↔ ledger consistency | Outbox + seq; strict transitions applied at once and kept if rejected (alert); permissive ones applied after ACCEPTED, reverted if rejected | Seungmin, Harits | Confirmed |
 | D-13 | Rule Engine data access | Core read-only views (as of a checkpoint) + Gateway query API + direct node reads; no DB access | Anik, Seungmin | Confirmed |
 | D-14 | Rule / checkpoint cadence | Checkpoint interval = integer multiple of the bucket (default 1×) + on state changes; rules at every checkpoint + after closing + manual | Anik, Seungmin | Confirmed |
@@ -183,7 +186,7 @@
 | `ROSTER_AMEND` (correction after freeze) | threshold orgs other than the requester |
 | `TOKEN_REISSUE` (reissue an unused link) | threshold orgs other than the requester |
 | `WINDOW_CHANGE` (before closing only) | threshold orgs other than the requester |
-| `ELECTION_CLOSE_EARLY` | threshold orgs other than the requester |
+| `ELECTION_CLOSE_EARLY` | threshold orgs other than the requester (exception since v1.5: once every voter has voted, the operator admin closes without a proposal, ELECTION_CLOSED reason ALL_VOTED, R4 check planned; the Gateway and contract record it, setting ALL_VOTED_CLOSE, needs a contract deployed from this version) |
 | `ELECTION_VOID` (void / cancel before voting) | threshold orgs other than the requester |
 
 - The requesting org signs the request; each deciding org signs its approval or rejection **with its own key**. Core and

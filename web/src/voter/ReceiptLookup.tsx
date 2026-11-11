@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import type { BallotReceipt } from "../api/types";
 import { Button } from "../ui";
@@ -26,7 +27,7 @@ export default function ReceiptLookup() {
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col px-6">
       <header className="flex h-14 items-center">
-        <span className="text-[17px] font-bold text-primary">PureVoting</span>
+        <Link to="/" className="text-[17px] font-bold text-primary">PureVoting</Link>
       </header>
       <div className="flex-1 pt-8">
         <h1 className="text-[24px] font-bold leading-snug">

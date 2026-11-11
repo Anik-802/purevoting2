@@ -23,7 +23,16 @@ export default function CreateElection() {
   // one Idempotency-Key per form content: a lost answer or a double click never creates a second election
   const idemKey = useMemo(() => crypto.randomUUID(), [title, start, end, candidates]);
 
-  const valid = title.trim() && candidates.every((c) => c.name.trim()) && new Date(end) > new Date(start);
+  // the first missing item, shown under the disabled button
+  const blankCandidate = candidates.findIndex((c) => !c.name.trim());
+  const missing = !title.trim()
+    ? "선거 이름을 입력하세요."
+    : !start || !end || !(new Date(end) > new Date(start))
+      ? "투표 종료는 투표 시작보다 늦어야 해요."
+      : blankCandidate >= 0
+        ? `후보 ${blankCandidate + 1}의 이름을 입력하거나, 쓰지 않는 줄은 삭제하세요.`
+        : "";
+  const valid = !missing;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -81,7 +90,8 @@ export default function CreateElection() {
               <input className={`${input} min-w-0 flex-1`} placeholder="이름" value={c.name} onChange={(e) => set(i, "name", e.target.value)} />
               {/* core-api Candidate has no description yet: pledges exist only in the mock */}
               {api.capabilities.mode === "mock" && (
-                <input className={`${input} order-last sm:order-none`} placeholder="공약 한 줄 (선택)" value={c.description} onChange={(e) => set(i, "description", e.target.value)} />
+                // flex-[2] (basis 0) instead of the input's w-full, which squeezed the name field to zero width
+                <input className={`${input} order-last min-w-0 basis-full sm:order-none sm:flex-[2]`} placeholder="공약 한 줄 (선택)" value={c.description} onChange={(e) => set(i, "description", e.target.value)} />
               )}
               <Button
                 type="button"
@@ -98,6 +108,7 @@ export default function CreateElection() {
       </Card>
 
       {error && <p className="mt-3 text-[14px] text-danger">{error}</p>}
+      {missing && <p className="mt-3 text-right text-[14px] text-ink-3">{missing}</p>}
       <div className="mt-6 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={() => nav("/admin")}>
           취소

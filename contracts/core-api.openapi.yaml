@@ -403,6 +403,34 @@ paths:
             application/problem+json:
               schema: { $ref: './common.schema.json#/$defs/Problem' }
 
+  /v1/elections/{election_id}:close:
+    post:
+      tags: [elections]
+      operationId: closeElection
+      summary: OPEN → CLOSED once every voter has voted (decisions v1.5). Emits ELECTION_CLOSED(ALL_VOTED), CHECKPOINT_COMMITTED(STATE_CHANGE) and CHECKPOINT_COMMITTED(CLOSE_FINAL). Already CLOSED → 202 with the same election (retry-safe).
+      description: |
+        No proposal or approval: allowed only when every ACTIVE voter has a non-revoked token, every such token is USED
+        and every registered credential has a ballot (live counts at the request), so no voter can lose a vote; refused in
+        the last bucket (closed_at would be window_end; the scheduled close follows). closed_at = floor_to_bucket(now) + time_bucket_seconds
+        (every accepted voter event satisfies occurred_at + bucket <= closed_at, R2). Strict transition: applied at once
+        and kept if the Gateway rejects it (alert). Otherwise 409 INVALID_STATE_TRANSITION (not OPEN, no token issued,
+        someone has not voted yet, last bucket, or the deployment has it off: ALL_VOTED_CLOSE). R4 is to re-check the condition from the CLOSE_FINAL checkpoint counts (not implemented yet).
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '401': { $ref: '#/components/responses/Problem' }
+        '202':
+          description: Transition requested
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Election' }
+        '409':
+          description: INVALID_STATE_TRANSITION
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
   /v1/elections/{election_id}/tokens:issue:
     post:
       tags: [elections]

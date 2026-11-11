@@ -93,10 +93,12 @@ def advance(conn, e: dict, now: int) -> None:
         close(conn, e, end)
 
 
-def close(conn, e: dict, closed_at: int) -> None:
-    """Scheduled close at window_end (strict: applied at once): ELECTION_CLOSED, STATE_CHANGE, then CLOSE_FINAL
-    (every voter event is already in the outbox, since each one is written in its own request's transaction)."""
-    emit_system(conn, e, "ELECTION_CLOSED", {"reason": "SCHEDULED", "closed_at": iso(closed_at)}, closed_at)
+def close(conn, e: dict, closed_at: int, reason: str = "SCHEDULED", at: int | None = None) -> None:
+    """Close (strict: applied at once): ELECTION_CLOSED, STATE_CHANGE, then CLOSE_FINAL (every voter event is already
+    in the outbox, since each one is written in its own request's transaction). Scheduled at window_end; ALL_VOTED is
+    decided at `at`, with closed_at the next bucket boundary."""
+    at = closed_at if at is None else at
+    emit_system(conn, e, "ELECTION_CLOSED", {"reason": reason, "closed_at": iso(closed_at)}, at)
     set_status(conn, e, "CLOSED", e["open_checkpoint"])
-    commit_checkpoint(conn, e, "STATE_CHANGE", closed_at)
-    commit_checkpoint(conn, e, "CLOSE_FINAL", closed_at)
+    commit_checkpoint(conn, e, "STATE_CHANGE", at)
+    commit_checkpoint(conn, e, "CLOSE_FINAL", at)
