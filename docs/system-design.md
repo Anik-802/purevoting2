@@ -115,7 +115,7 @@ DRAFT ──freeze roster──> ROSTER_FROZEN ──window start──> OPEN �
    other creation fields stored in the contract with the ledger event.
    - The election can move on only after it passes (`creation_check = PASSED`).
    - On a mismatch the election is abandoned and deleted at Core.
-3. Register and freeze the roster. Freezing checks that there are at least 10 expected voters per time bucket.
+3. Register and freeze the roster. Since decisions v1.4 freezing no longer checks the number of expected voters per time bucket (D-10).
 4. Issue links. Raw tokens leave only as CSV or email; the server keeps only their hashes.
 
 ### 3.3 Voting

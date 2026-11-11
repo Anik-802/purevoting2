@@ -17,7 +17,7 @@ export default function AdminLayout() {
       <div className="bg-navy text-[13px] text-white/85">
         <div className="mx-auto flex h-9 max-w-6xl items-center gap-2 px-4 sm:px-6">
           <span className="shrink-0 rounded bg-white/15 px-1.5 py-0.5 text-[12px] font-semibold">알림</span>
-          <span className="truncate">투표 데이터는 시간 구간마다 블록체인에 기록되고, 규칙 엔진이 체크포인트마다 검사합니다.</span>
+          <span className="truncate">투표 데이터는 묶음으로 블록체인에 기록되고, 규칙 엔진이 체크포인트마다 검사합니다.</span>
         </div>
       </div>
       <header className="border-b border-line bg-white">

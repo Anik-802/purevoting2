@@ -5,25 +5,25 @@ import { Button, Card } from "../ui";
 
 const toLocal = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 
+// D-10: the time bucket is fixed at one minute (not chosen by the admin); datetime-local inputs have minute precision,
+// so the window is always on a bucket boundary
+const BUCKET_SECONDS = 60;
+
 export default function CreateElection() {
   const nav = useNavigate();
   const [title, setTitle] = useState("");
-  const [bucket, setBucket] = useState(60);
-  // next quarter hour after one hour from now: aligned for every bucket choice
+  // next quarter hour after one hour from now
   const firstStart = Math.ceil((Date.now() + 3_600_000) / 900_000) * 900_000;
   const [start, setStart] = useState(toLocal(new Date(firstStart)));
-  // demo configuration: 10-minute window (D-10: 100 voters keep ≥ 10 expected voters per 60 s bucket)
+  // demo configuration: 10-minute window
   const [end, setEnd] = useState(toLocal(new Date(firstStart + 600_000)));
   const [candidates, setCandidates] = useState([{ name: "", description: "" }, { name: "", description: "" }]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   // one Idempotency-Key per form content: a lost answer or a double click never creates a second election
-  const idemKey = useMemo(() => crypto.randomUUID(), [title, bucket, start, end, candidates]);
+  const idemKey = useMemo(() => crypto.randomUUID(), [title, start, end, candidates]);
 
-  // D-10 / contracts README: the window must start and end on a time-bucket boundary
-  const aligned = (v: string) => (new Date(v).getTime() / 1000) % bucket === 0;
-  const misaligned = !aligned(start) || !aligned(end);
-  const valid = title.trim() && candidates.every((c) => c.name.trim()) && new Date(end) > new Date(start) && !misaligned;
+  const valid = title.trim() && candidates.every((c) => c.name.trim()) && new Date(end) > new Date(start);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -31,7 +31,7 @@ export default function CreateElection() {
     try {
       const el = await api.createElection({
         title: title.trim(),
-        time_bucket_seconds: bucket,
+        time_bucket_seconds: BUCKET_SECONDS,
         window_start: new Date(start).toISOString(),
         window_end: new Date(end).toISOString(),
         candidates: candidates.map((c) => ({ name: c.name.trim(), description: c.description.trim() || undefined })),
@@ -63,19 +63,6 @@ export default function CreateElection() {
             <input type="datetime-local" className={input} value={end} onChange={(e) => setEnd(e.target.value)} />
           </Field>
         </div>
-        <Field label="시간 구간 (투표 시각을 이 단위로만 기록)">
-          <select className={input} value={bucket} onChange={(e) => setBucket(Number(e.target.value))}>
-            <option value={60}>60초 (시연 설정)</option>
-            <option value={300}>5분</option>
-            <option value={900}>15분 (평가 설정)</option>
-          </select>
-        </Field>
-        <p className="-mt-2 text-[13px] text-ink-4">구간마다 예상 투표자가 10명 이상이어야 명단을 확정할 수 있어요. 기간이 길면 구간을 늘리세요.</p>
-        {misaligned && (
-          <p className="rounded-xl bg-warn-soft p-3 text-[13px] text-warn">
-            투표 시작·종료 시각은 시간 구간({bucket / 60}분) 단위로 맞춰야 해요. 예: {bucket === 900 ? "10:00, 10:15, 10:30" : "10:00, 10:05, 10:10"}
-          </p>
-        )}
       </Card>
 
       <Card className="mt-4 p-6">

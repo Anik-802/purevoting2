@@ -264,7 +264,7 @@ def test_ledger_rejection_of_election_created_allows_delete(env):
     assert c.get(f"/v1/elections/{eid}", headers=auth).status_code == 404
 
 
-def test_bucket_too_small_and_validation(env):
+def test_small_roster_freezes_and_validation(env):
     c, auth, t0 = env["client"], env["auth"], env["t0"]
     base = {"title": "Small", "window_start": iso(t0 + 600), "window_end": iso(t0 + 1200),
             "time_bucket_seconds": B, "checkpoint_interval_seconds": B, "candidates": [{"name": "A"}],
@@ -279,8 +279,9 @@ def test_bucket_too_small_and_validation(env):
     deliver_until_idle(eid)
     c.put(f"/v1/elections/{eid}/roster", headers=auth,
           json={"voters": [{"external_ref": f"x{i}", "name": "n"} for i in range(20)]})
+    # D-10: no sizing rule any more; fewer than 10 expected voters per bucket still freezes
     r = c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth)
-    assert r.status_code == 422 and r.json()["code"] == "BUCKET_TOO_SMALL"
+    assert r.status_code == 202, r.text
 
 
 def _create(c, auth, t0, title="Idem", key=None):

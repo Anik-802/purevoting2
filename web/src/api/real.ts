@@ -14,7 +14,6 @@ import {
   type Tally,
   type VoterInput,
 } from "./types";
-export { votersPerBucket } from "./util";
 
 /** what this backend can do today; Core's tally / finalize arrive 11-09, opening and closing follow the window */
 export const capabilities = { mode: "real" as const, manualOpenClose: false, tally: true, finalize: true };
@@ -33,7 +32,6 @@ const KO: Record<string, string> = {
   ELECTION_NOT_OPEN: "지금은 투표 기간이 아니에요.",
   RATE_LIMITED: "요청이 많아요. 잠시 뒤 다시 시도해 주세요.",
   ROSTER_FROZEN: "확정된 명단은 바꿀 수 없어요 (명단 정정은 기관 승인 필요).",
-  BUCKET_TOO_SMALL: "시간 구간당 예상 투표자가 10명보다 적어요. 투표 기간을 줄이거나 명단을 늘리세요.",
   INVALID_STATE_TRANSITION: "지금 상태에서는 할 수 없는 작업이에요.",
   FINDINGS_UNREVIEWED: "확정할 수 없어요: TALLY 체크포인트의 R1–R5 결과가 모두 기록되고, 이상 탐지·판단 보류가 기관 검토로 해결돼야 해요.",
   AUDIT_UNRESOLVED: "문제가 확정된 탐지 결과가 있어 결과를 확정할 수 없어요. 선거 무효(기관 승인)만 가능해요.",

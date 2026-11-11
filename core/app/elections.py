@@ -203,8 +203,6 @@ def freeze(conn, e: dict, now: int) -> None:
     active = _active_keys(conn, e["election_id"])
     if not active:
         raise Refused(409, "INVALID_STATE_TRANSITION", "roster is empty")
-    if len(active) * e["time_bucket_seconds"] < 10 * (e["window_end"] - e["window_start"]):
-        raise Refused(422, "BUCKET_TOO_SMALL", "fewer than 10 expected voters per bucket (D-10)")
     ledger.emit_system(conn, e, "ROSTER_FROZEN",
                        {"roster_hash": hashing.roster_hash(active), "voter_count": len(active)}, now)
     set_status(conn, e, "ROSTER_FROZEN", e["open_checkpoint"])

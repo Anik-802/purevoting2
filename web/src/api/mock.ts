@@ -12,8 +12,6 @@ import {
   type Tally,
   type VoterInput,
 } from "./types";
-import { votersPerBucket } from "./util";
-export { votersPerBucket };
 
 /** what this backend can do: everything, in memory */
 export const capabilities = { mode: "mock" as "mock" | "real", manualOpenClose: true, tally: true, finalize: true };
@@ -234,9 +232,6 @@ export async function freezeRoster(id: string): Promise<Election> {
   const e = find(id);
   if (e.creation_check !== "PASSED") throw new ApiError("INVALID_STATE_TRANSITION", "선거 생성 검사가 끝나야 명단을 확정할 수 있어요");
   if (e.voter_count === 0) throw new ApiError("VALIDATION_ERROR", "명단을 먼저 등록하세요");
-  const perBucket = votersPerBucket(e, e.voter_count);
-  if (perBucket < 10)
-    throw new ApiError("BUCKET_TOO_SMALL", `시간 구간당 예상 투표자가 ${perBucket.toFixed(1)}명이에요. 10명 이상이어야 투표 시각으로 투표자를 추정할 수 없어요 (투표 기간을 줄이거나 명단을 늘리세요)`);
   e.status = "ROSTER_FROZEN";
   return { ...e };
 }

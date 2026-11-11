@@ -386,7 +386,7 @@ paths:
       tags: [elections]
       operationId: freezeRoster
       summary: DRAFT → ROSTER_FROZEN. Emits ROSTER_FROZEN and CHECKPOINT_COMMITTED(STATE_CHANGE). Already ROSTER_FROZEN → 202 with the same election (retry-safe).
-      description: Refused with 409 INVALID_STATE_TRANSITION while creation_check ≠ PASSED (chain-interface.md creation check). Refused with BUCKET_TOO_SMALL when voter_count × time_bucket_seconds ÷ voting window length < 10 (D-10 sizing rule; fewer than 10 expected voters per bucket). Roster edits are refused immediately and stay refused even if the Gateway rejects ROSTER_FROZEN (strict transition, kept + alert). `transition.ledger_status` shows the Gateway outcome.
+      description: Refused with 409 INVALID_STATE_TRANSITION while creation_check ≠ PASSED (chain-interface.md creation check). The D-10 sizing rule is not enforced since decisions v1.4, so BUCKET_TOO_SMALL is no longer returned. Roster edits are refused immediately and stay refused even if the Gateway rejects ROSTER_FROZEN (strict transition, kept + alert). `transition.ledger_status` shows the Gateway outcome.
       security: [{ bearer: [admin] }]
       parameters:
         - { $ref: '#/components/parameters/ElectionIdPath' }
@@ -399,11 +399,6 @@ paths:
               schema: { $ref: '#/components/schemas/Election' }
         '409':
           description: INVALID_STATE_TRANSITION
-          content:
-            application/problem+json:
-              schema: { $ref: './common.schema.json#/$defs/Problem' }
-        '422':
-          description: BUCKET_TOO_SMALL
           content:
             application/problem+json:
               schema: { $ref: './common.schema.json#/$defs/Problem' }
@@ -659,15 +654,13 @@ paths:
           so a concurrent redeem either happens before (action FAILED) or is refused (404).
         - ROSTER_AMEND: exactly the voter_keys in `target.add` are added and `target.remove` removed; adding a voter_key that
           is already ACTIVE or removing one that is not ACTIVE fails the whole action (INVALID_STATE_TRANSITION); roster_hash_after
-          must equal set_root of the resulting ACTIVE roster (R4 checks both). Refused if the D-10 sizing rule would no
-          longer hold for the remaining roster (BUCKET_TOO_SMALL).
+          must equal set_root of the resulting ACTIVE roster (R4 checks both).
         - An approved proposal is executed at most once (ADMIN_ACTION_EXECUTED twice → Gateway ALREADY_EXECUTED).
         - Order (chain-interface.md "Execution order"): ADMIN_ACTION_EXECUTED first, then that proposal's effect events
           (ROSTER_AMENDED, TOKEN_REVOKED, WINDOW_CHANGED, ELECTION_VOIDED) in the next seq numbers, before any other system event.
         - WINDOW_CHANGE: election ROSTER_FROZEN or OPEN, execution time <= current window_end − one bucket,
-          new_window_end bucket-aligned, new_window_end > window_start and new_window_end >= ceil_to_bucket(execution time) + one bucket,
-          and the D-10 sizing rule still holds for the new window; else
-          INVALID_STATE_TRANSITION. A shortening is a strict change (applied at once); an extension is permissive (applied
+          new_window_end bucket-aligned, new_window_end > window_start and new_window_end >= ceil_to_bucket(execution time) + one bucket;
+          else INVALID_STATE_TRANSITION. A shortening is a strict change (applied at once); an extension is permissive (applied
           only after WINDOW_CHANGED is ACCEPTED; until then the old end stays in force). R4 checks
           WINDOW_CHANGED.new_window_end == target.new_window_end.
         - ELECTION_VOID: election (in Core) DRAFT, ROSTER_FROZEN, CLOSED or TALLIED (not OPEN — close it first; not FINALIZED);
@@ -1472,7 +1465,7 @@ components:
         title: { type: string, minLength: 1, maxLength: 200 }
         window_start: { $ref: './common.schema.json#/$defs/Timestamp' }
         window_end: { $ref: './common.schema.json#/$defs/Timestamp' }
-        time_bucket_seconds: { type: integer, minimum: 30, maximum: 86400, description: 'D-10. No default: choose it so that >= 10 voters are expected per bucket (checked at roster freeze)' }
+        time_bucket_seconds: { type: integer, minimum: 30, maximum: 86400, description: 'D-10. No default in the API (the admin web sends 60). Guidance only, not checked since decisions v1.4: >= 10 voters expected per bucket' }
         checkpoint_interval_seconds: { type: integer, minimum: 30, description: 'D-14. Integer multiple of time_bucket_seconds (checkpoint numbers must not be finer than buckets)' }
         candidates:
           type: array

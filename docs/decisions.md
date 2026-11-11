@@ -1,4 +1,4 @@
-# Design decisions (v1.3)
+# Design decisions (v1.4)
 
 > 2026-10-18 v1.0: after a supervisor review (DECISIONS VERDICT: READY TO CONFIRM) every item except D-02 and D-15 is
 > **confirmed as recommended**. Wording added at confirmation is marked **Confirmed note (v1.0)**. D-02 is delegated to
@@ -18,6 +18,9 @@
 > after supervisor reviews. M4, T14 (fresh-PC test) and the 12-04 date removed; everything finished by 11-30.
 > 2026-11-06 v1.3: new D-29 (public access through a Tailscale Funnel from the demo PC; the compose `web` service is the
 > only public entry), after a supervisor review of the deployment options.
+> 2026-11-11 v1.4: D-10 — the sizing rule is no longer enforced (a small roster must still be able to vote): no
+> BUCKET_TOO_SMALL at roster freeze; the web fixes the bucket at 60 s and no longer offers a choice. The residual risk
+> is disclosed (threat model S1).
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -34,7 +37,7 @@
 | D-07 | Anonymous credential | **The browser generates the credential**; the server registers only its hash (in the same transaction as the link use) | Seungmin | Confirmed |
 | D-08 | Ballot encryption | Sealed with the election public key (libsodium sealed box), decrypted after closing | Seungmin | Confirmed |
 | D-09 | Lost link / credential | **A used link is never re-enabled.** Only a lost unused link is reissued after approval (TOKEN_REISSUE, optional). A lost credential = abstention | Seungmin | Confirmed |
-| D-10 | Voter-side time precision | Ledger and views keep only bucketed times and checkpoint numbers (bucket size: ≥ 10 expected voters per bucket, no default); window bounds aligned to buckets | Seungmin, Harits, Anik | Confirmed |
+| D-10 | Voter-side time precision | Ledger and views keep only bucketed times and checkpoint numbers (bucket 60 s in the web, not enforced per roster size since v1.4); window bounds aligned to buckets | Seungmin, Harits, Anik | Confirmed (v1.4 change) |
 | D-11 | Approvals | Roster amendment, link reissue, window change, early close, void: approval by **threshold** orgs other than the requester, each signing with its own key; signatures verified on chain | Harits, Seungmin | Confirmed |
 | D-12 | Core ↔ ledger consistency | Outbox + seq; strict transitions applied at once and kept if rejected (alert); permissive ones applied after ACCEPTED, reverted if rejected | Seungmin, Harits | Confirmed |
 | D-13 | Rule Engine data access | Core read-only views (as of a checkpoint) + Gateway query API + direct node reads; no DB access | Anik, Seungmin | Confirmed |
@@ -162,10 +165,15 @@
   - Voter-side events: time rounded down to the bucket, random `evr_` IDs without timestamps, no receive time, no sequence number.
   - Views carry checkpoint numbers instead of times.
   - Window start and end are aligned to buckets, so R2 decides late submissions exactly with `occurred_at + bucket > end`.
-- **Enforced at roster freeze:** refused if `roster size × bucket ÷ window length < 10` (BUCKET_TOO_SMALL). No default bucket size.
-- **Sizing rule:** at least 10 expected voters per bucket on average (roughly `bucket ≥ 10 × window ÷ expected voters`);
-  e.g. 100 voters over 2 hours → bucket ≥ 15 minutes. With 1–2 voters per bucket, link use and ballot receipt pair up and,
-  together with the key revealed after tally, a holder of the CSV / credential DB could identify ballots (threat model S1).
+- **v1.4 change (2026-11-11):** the sizing rule below is guidance only and no longer enforced: refusing the freeze left a
+  small roster unable to vote at all. Roster freeze no longer returns BUCKET_TOO_SMALL; the admin web fixes the bucket at
+  60 s (no choice on screen). The API still takes `time_bucket_seconds` (T01 evaluation configuration: 900 s).
+- **Sizing guidance (v0.6, not enforced since v1.4):** at least 10 expected voters per bucket on average (roughly
+  `bucket ≥ 10 × window ÷ expected voters`). With 1–2 voters per bucket, link use and ballot receipt pair up and,
+  together with the key revealed after tally, a holder of the CSV / credential DB could identify ballots (threat model S1);
+  with the web's 60 s bucket a bucket holds about `roster ÷ window minutes` expected voters, so this holds for most
+  web-created elections (100 voters → any window over 10 minutes), worse with lower turnout. Accepted by the team lead
+  (2026-11-11) so that a small roster can always vote; a disclosed limitation (threat model S1).
 - **Affects:** `ledger-events.schema.json`, `ElectionCreate.time_bucket_seconds`
 
 ### D-11. Approvals

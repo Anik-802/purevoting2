@@ -47,7 +47,7 @@ organization and never creates findings; it only relays signatures made in the s
    - Until the check is PASSED, refuse freeze, issue and admin actions. On MISMATCH, only deletion is possible.
 2. **Roster and links:**
    - Roster PUT only in DRAFT.
-   - Freeze applies the D-10 sizing rule (`BUCKET_TOO_SMALL`).
+   - Freeze no longer applies the D-10 sizing rule (decisions v1.4; the web fixes the bucket at 60 s).
    - Issue tokens (CSV, with Idempotency-Key retry for 15 min). Only `token_hash` is stored.
 3. **Voting:**
    - `redeem` locks the token, marks it USED and inserts `nullifier_hash` into the `ballot` schema, all in **one transaction**. No column links the two.

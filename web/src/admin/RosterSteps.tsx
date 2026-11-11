@@ -95,7 +95,6 @@ export function RosterCard({ e, onChange }: { e: Election; onChange: () => void 
   }, [e.election_id, e.voter_count]);
 
   const errors = rows?.filter((r) => r.error) ?? [];
-  const perBucket = api.votersPerBucket(e, rows && !errors.length ? rows.length : e.voter_count);
 
   async function onFile(f?: File) {
     if (!f) return;
@@ -203,7 +202,6 @@ export function RosterCard({ e, onChange }: { e: Election; onChange: () => void 
               </tbody>
             </table>
           </div>
-          <BucketHint value={perBucket} bucket={e.time_bucket_seconds} />
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button variant="ghost" onClick={() => setRows(undefined)}>
               다시 고르기
@@ -233,24 +231,11 @@ export function RosterCard({ e, onChange }: { e: Election; onChange: () => void 
               ))}
             </ul>
           </details>
-          {editable && <BucketHint value={perBucket} bucket={e.time_bucket_seconds} />}
         </div>
       )}
-      {!rows && editable && e.voter_count > 0 && !saved?.length && <BucketHint value={perBucket} bucket={e.time_bucket_seconds} />}
 
       {msg && <p className={`mt-4 rounded-xl p-3 text-[14px] ${msg.tone === "ok" ? "bg-ok-soft text-ok" : "bg-danger-soft text-danger"}`}>{msg.text}</p>}
     </Card>
-  );
-}
-
-/** D-10: fewer than 10 expected voters per time bucket would let voting times point at voters */
-function BucketHint({ value, bucket }: { value: number; bucket: number }) {
-  const ok = value >= 10;
-  return (
-    <p className={`mt-3 rounded-xl p-3 text-[13px] ${ok ? "bg-surface text-ink-3" : "bg-warn-soft text-warn"}`}>
-      시간 구간({bucket}초)당 예상 투표자 <b>{value.toFixed(1)}명</b>
-      {ok ? " · 확정할 수 있어요" : " · 10명 이상이어야 확정할 수 있어요. 투표 시각으로 누가 투표했는지 추정되지 않게 하는 규칙이에요 (기간을 줄이거나 명단을 늘리세요)"}
-    </p>
   );
 }
 

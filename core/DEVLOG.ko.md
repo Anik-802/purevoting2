@@ -441,3 +441,7 @@ INCONCLUSIVE를 기대하는 T09/T11에 재사용하려면 분기 추가, partia
 
 - 실제 T01: Harits의 Gateway·노드·레지스트리 compose 블록, Anik의 Rule Engine 서비스(지금 `rules/Dockerfile`은 오프라인 시뮬레이션만), T01 정답 라벨 `expected.json` 대기
 - 3주차 공식 T01 프리셋(demo/evaluation)은 팀장 결정
+
+## 2026-11-11 D-10 v1.4
+
+- 명단 고정의 BUCKET_TOO_SMALL 거부 삭제(구간당 10명 기준은 권고로만, 위 기록의 강제는 이 날 폐지). 관리자 웹은 구간 60초 고정, 선택지 없음. 남는 위험은 위협 모델 S1
