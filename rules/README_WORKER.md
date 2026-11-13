@@ -1,24 +1,52 @@
-# Rule Engine service — November 9 handoff
+# Rule Engine service and Docker evidence
 
 The HTTP worker polls Core, evaluates rules at accepted checkpoints, signs a finding, registers its hash at the Gateway, then sends the same durable body to Core. Nothing calls the worker. The previous fixture simulation remains available with `python rules/run_simulation.py`.
 
-## Run against a local development stack
+## Capture Docker evidence with a development Gateway
 
-Use a **fresh development project and credentials**. This stack writes a real PostgreSQL database. Its Gateway and RPC are test doubles, not PureChain. They do not independently verify inclusion, organizational signatures or the on-chain signer registry. Do not use this overlay for the official T01, E1/E2, or part B run.
+On a local Docker Desktop host using **Linux containers**, with Compose **v2.24.4+** and Python 3.11+, open
+PowerShell at the repository root and run:
 
-1. Copy the repository's `.env.example` to a private `.env`. Fill all required passwords, service keys, JWT secret and staff setup credentials. Use distinct, disposable keys. The worker needs its own valid secp256k1 private key in `RULE_ENGINE_SIGNER_KEY`; never send it in a progress report. For **this development setup only**, choose a positive numeric `CHAIN_ID`, a nonzero test `CONTRACT_ADDRESS`, `CONFIRMATION_DEPTH=2`, and `PINNED_NODE_URL=http://ledger-gateway:8100/rpc`. For a team deployment use the independently agreed pins and registered signer.
-2. Run the following from the repository root using Docker Compose v2. Stop competing local services on those ports or choose separate published host ports. This worker intentionally does not run in the default part-B mock stack. The command below is provided for the demo PC; Docker execution was not tested in the authoring environment.
+```powershell
+docker version
+docker compose version
+.\.venv\Scripts\python.exe rules\devtools\compose_evidence.py
+```
 
-   ```sh
-   docker compose -p pv-anik-dev --profile mock -f docker-compose.yml -f docker-compose.integration.yml -f rules/devtools/compose.worker-smoke.yml up -d --build
-   ```
-3. To create a disposable election through the Core API, use a local Python 3.11+ environment with `core/requirements.txt` installed (keep it separate from the rules environment). Set `SMOKE_USERNAME` and `SMOKE_PASSWORD` to the staff setup credentials in that private development database. Run:
+Use the existing rules virtual environment shown above, or `py -3.11 rules/devtools/compose_evidence.py`.
+The helper itself uses only Python's standard library.
 
-   ```sh
-   python rules/devtools/worker_smoke.py --create-local-election --core http://127.0.0.1:8000
-   ```
+The helper creates a fresh, randomly named Compose project. It uses only throwaway credentials, does
+not read the project's private `.env`, and publishes no host ports. It uses the merged integration Rule Engine
+service and a temporary final overlay that restores the stand-in Gateway's Core image, removes its real-chain
+settings and mounts, clears its node/registry dependencies, and makes staff setup depend only on PostgreSQL.
+Only `db`, `staff-setup`, `core`, the stand-in `ledger-gateway`, and `rule-engine` are started. It builds those services,
+waits for the real Docker healthcheck, and runs this repository's `worker_smoke.py` inside the real Core container.
+The stand-in Gateway/RPC and the one synthetic election are for this developer check only. The script tears down
+its own containers and volumes; it does not start the web service or modify the team's stack.
 
-The check creates one election, issues 20 links, submits one sealed ballot and reads the stored findings for its checkpoint. Expect R1/R2/R3 PASS and R4/R5 INCONCLUSIVE. It exits nonzero for other results. This checks one development path; it does not execute the formal scenario script or supply anyone's expected labels. Shut down using the same compose arguments and `down`. The named data volumes persist.
+The script prints the path of a **new** UTF-8 JSON file under `purevoting-evidence` in your home folder. Attach the
+JSON (or a screenshot showing those fields) **only after** the script exits successfully and the report says
+`passed: true`. It contains worker health before/after, the first poll (often all zero on a fresh DB), the first
+poll that stored findings, and the actual smoke result: one ballot, five findings, R1–R3 PASS and R4/R5
+INCONCLUSIVE. It never exports raw Docker logs, inspect environment blocks, tokens or credentials. If the command
+fails, its evidence file records the failing stage rather than reporting a pass. This does not verify the **real**
+Gateway, PureChain signer/anchors or the official T01 scenario. For those, use the integration stack only after
+Harits supplies the agreed pins, deployment address and healthy real Gateway.
+
+## Development smoke scope
+
+Use `compose_evidence.py` above for the isolated local check. The current integration file also defines real nodes,
+contract deployment and a registry setup job that writes `.env`. The `compose.worker-smoke.yml` overlay alone does
+not remove those dependencies or the real Gateway image and data mount; the helper's final temporary overlay is
+required for this developer run. No team `.env` or chain bootstrap is needed, and the helper does not change either.
+
+The check creates one election, issues 20 links, submits one sealed ballot and reads the stored findings for its
+checkpoint. Its Gateway and RPC are test doubles: they do not independently verify inclusion, organizational
+signatures or the on-chain signer registry. Expect R1/R2/R3 PASS and R4/R5 INCONCLUSIVE; other results cause failure.
+This checks one development path, does not execute official T01/E1/E2 or part B, and supplies no independent expected
+labels. A passing Docker run must be collected on the target host; source/configuration review alone is not runtime
+evidence. The helper removes its own disposable containers and named volumes after the check.
 
 ## Run directly or against the real Gateway
 
