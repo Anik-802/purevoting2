@@ -1,0 +1,29 @@
+{
+  "scenario": "T08b",
+  "rules": {
+    "R1": "PASS",
+    "R2": "PASS",
+    "R3": "PASS",
+    "R4": "PASS",
+    "R5": "FAIL"
+  },
+  "observed_nonzero": {
+    "R1": [],
+    "R2": [],
+    "R3": [
+      "ballots_received",
+      "credentials_issued",
+      "ledger_ballots",
+      "ledger_token_used",
+      "roster_active",
+      "token_used",
+      "tokens_active"
+    ],
+    "R4": [],
+    "R5": [
+      "sealed_hash_mismatches",
+      "tables_mismatched"
+    ]
+  },
+  "cause_code": "DATA_TAMPERING"
+}
