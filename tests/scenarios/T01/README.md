@@ -24,7 +24,12 @@ its own first:
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.integration.yml run --rm registry-setup
 docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.integration.yml" tools/trustees.sh keygen
 ```
+
+The last line (D-30, once per database) makes and registers the three organizations' ElGamal keys; without it
+election creation answers 422 TRUSTEES_NOT_REGISTERED (or set `BALLOT_SCHEME=SEALED_BOX_V1` for the D-08 sealed box).
+`setup.py` encrypts each ballot with the election's scheme, as the voter web does. T01 does not tally.
 
 Back up `.env` first (it holds the org keys registered on chain, and the bootstrap rewrites it in place). A new chain
 later: `docker compose ... down -v` removes every volume of the project (nodes, database, Gateway and Rule Engine

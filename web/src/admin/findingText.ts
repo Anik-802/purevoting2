@@ -33,8 +33,8 @@ const CHECK: Record<string, string> = {
     "선거 상태 전체를 다시 계산해 계약의 상태 값과 대조",
   "Recompute all roster/token/config roots and verify revealed key derivation and commitment":
     "명단·토큰·설정 지문을 다시 계산하고 공개된 개인키가 맞는지 확인",
-  "Decrypt ledger-accepted sealed ballots and independently reproduce tally results and invalid set":
-    "장부에 기록된 표를 직접 열어 개표 결과와 무효표를 다시 계산",
+  "Decrypt ledger-accepted sealed ballots, or for ElGamal elections verify every ballot proof, the sums and the decryption shares, and independently reproduce tally results and invalid set":
+    "장부에 기록된 표를 직접 열거나(동형 암호 선거는 표 증명·합계·복호화 조각 검증) 개표 결과와 무효표를 다시 계산",
 };
 
 export function findingKo(f: Finding): { text: string; missing: string[] } {

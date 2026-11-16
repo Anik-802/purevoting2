@@ -353,6 +353,16 @@ class RuleEngineTests(unittest.TestCase):
         tally["payload"]["final_checkpoint"] = 2
         self.assertEqual(evaluate_rule("R3", snapshot).result, "FAIL")
 
+    def test_elgamal_tally_needs_shares_not_a_private_key(self):
+        # D-30: an ElGamal election never reveals a private key; R5 waits for the decryption shares instead
+        snapshot = self.snapshot("tally_count_mismatch")
+        config = snapshot["views"]["election_config"][0]
+        config["ballot_scheme"] = "ELGAMAL_ED25519_V1"
+        config["decryption_shares"] = None
+        self.assertEqual(evaluate_rule("R5", snapshot).inconclusive_reason, "KEY_NOT_REVEALED")
+        config["decryption_shares"] = []
+        self.assertNotEqual(evaluate_rule("R5", snapshot).inconclusive_reason, "KEY_NOT_REVEALED")
+
     def test_r4_duplicate_execution_and_target_absence_are_demonstrated(self):
         snapshot = self.snapshot()
         factory = _Factory(88)

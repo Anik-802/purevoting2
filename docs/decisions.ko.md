@@ -28,6 +28,7 @@
 > v1.3 (2026-11-06): D-29(공개 접속: 데모 PC에서 Tailscale Funnel, compose `web` 서비스가 유일한 공개 입구) 추가. 배포 방식 감독관 검토 반영
 > v1.4 (2026-11-11): D-10 — 구간 크기 기준을 더는 강제하지 않음(명단이 작아도 투표할 수 있어야 함). 명단 확정 시 BUCKET_TOO_SMALL 거부 없음, 웹은 구간을 60초로 고정하고 선택지를 없앰. 남는 위험은 공개 한계로 둠(위협 모델 S1)
 > v1.5 (2026-11-11): D-11 예외 — 모든 유권자가 투표하면(모든 ACTIVE 유권자에게 토큰이 있고, 토큰 전부 사용, 모든 투표권에 표 있음, 마지막 구간 제외) 운영 기관 관리자가 제안 없이 종료 시각 전에 마감할 수 있음(ELECTION_CLOSED reason ALL_VOTED). 표를 잃는 유권자가 없음. R4가 조건을 다시 검사할 예정(아직 미구현, Anik). 팀장 결정
+> v1.6 (2026-11-12): D-30 추가 — 표를 세 기관 공동 키의 지수형 ElGamal 암호문(후보별 0/1, 유효성 증명 포함)으로 바꾸고, 후보별 합계만 기관마다 증명이 붙은 조각으로 복호화함. 통째의 개인키는 어디에도 없음. D-08·D-23은 `BALLOT_SCHEME=SEALED_BOX_V1`(되돌리기 설정)일 때만 적용. 팀장 결정. 이전 구현은 `sealedbox-baseline` 태그로 보관
 
 ## 요약
 
@@ -40,7 +41,7 @@
 | D-05 | 서버 언어·프레임워크 | Python(FastAPI) 통일, 웹은 TypeScript(React), 계약 Solidity(EVM, D-02) | 전원 | 확정 |
 | D-06 | DB | PostgreSQL **DB 1개 + 스키마 2개**(credential / ballot, 서로 다른 DB 권한), 규칙 엔진·AI는 DB 접근 없음 | 승민 | 확정 |
 | D-07 | 익명 투표권 방식 | **브라우저가 투표권을 생성**, 서버에는 해시만 등록(링크 사용과 한 트랜잭션) | 승민 | 확정 |
-| D-08 | 투표 암호화 | 선거 공개키로 봉인(libsodium sealed box), 마감 후 복호화 | 승민 | 확정 |
+| D-08 | 투표 암호화 | 선거 공개키로 봉인(libsodium sealed box), 마감 후 복호화 (v1.6: 기본은 D-30, `BALLOT_SCHEME=SEALED_BOX_V1`일 때만) | 승민 | 확정 (v1.6: 기본값은 D-30으로 대체) |
 | D-09 | 링크·투표권 분실 시 정책 | **사용된 링크는 절대 재활성화하지 않음**. 미사용 링크 분실만 승인 후 재발급(TOKEN_REISSUE). 투표권 분실은 기권 처리 | 승민 | 확정 |
 | D-10 | 투표 쪽 시각 정밀도 | 원장·view에는 시간 구간으로 내림한 시각과 체크포인트 번호만 기록(웹은 구간 60초 고정, v1.4부터 명단 크기에 따른 강제 없음), 투표 기간 경계는 구간에 맞춤 | 승민·Harits·Anik | 확정(v1.4 변경) |
 | D-11 | 승인 대상·기준·서명 | 명단 정정·링크 재발급·기간 변경·조기 마감, **요청 기관 외** 2개 기관 승인, 각 기관이 자기 키로 서명 (v1.5: 모두 투표하면 승인 없이 마감 가능) | Harits·승민 | 확정 |
@@ -55,12 +56,13 @@
 | D-20 | 계약 변경 절차 | PR로만 수정, 관련자에게 알림(필수 승인은 두지 않음) | 전원 | 확정 |
 | D-21 | 기관 서명키 등록·보관 | 각 기관 노드 계정이 **체인의 기관 레지스트리**에 자기 키를 등록, 선관위는 키를 지정할 수 없음. 키는 각 기관 승인자가 보관 | Harits·승민 | 확정 |
 | D-22 | 투표 쪽 위반 판정 주체 | 개별 투표 이벤트 검사(기간·중복)는 Gateway 소프트웨어, 체인은 배치의 시간 범위와 시스템 이벤트(상태 머신·승인 서명)를 검사 | Harits | 확정 |
-| D-23 | 선거 개인키 보관 | MVP: 선관위 단독 보관, **개표 후 키를 공개**해 감사자가 재집계(R5). 임계값 복호화는 향후 과제 | 승민 | 확정 |
+| D-23 | 선거 개인키 보관 | MVP: 선관위 단독 보관, **개표 후 키를 공개**해 감사자가 재집계(R5). 임계값 복호화는 향후 과제 (v1.6: D-30에는 통째의 개인키가 없음) | 승민 | 확정 (v1.6: SEALED_BOX_V1만) |
 | D-24 | 확정(finalize) 조건·검토 권한 | finding을 원장에 기록(규칙 엔진이 직접), FAIL/INCONCLUSIVE는 **운영 기관(선관위) 외 기관**의 서명 검토가 임계값 이상 있어야 해결. 스마트 계약이 확정 시 확인. AI 보고서는 선택 | 승민·Anik·Harits | 확정 |
 | D-25 | 규칙 엔진 운영 주체 | 규칙 엔진 키(ruleKey)는 선관위와 Gateway 운영 기관이 아닌 기관이 보관·운영(시연: 참관인, v1.1) | 전원 | 확정(v1.1) |
 | D-26 | Gateway 운영 주체 | 중립 기관 운영. 운영자는 전달을 늦출 수 있지만 서명된 승인·검토·finding은 위조할 수 없고, 서명자는 체인에 직접 제출 가능 | Harits | 확정 |
 | D-27 | 확정 깊이 | 블록 위에 D개 이상 쌓인 블록의 체인 정보만 인정(D = 2, *잠정*). 계약 주소처럼 배포 설정에 고정 | Harits, 승민, Anik | 확정(v1.1) |
 | D-28 | 일정 압축 | 데모 버전 2026-11-19, 모든 작업은 2026-11-30까지. 단계 M1–M3, 담당별 날짜, 넘겨주는 항목, 대체안은 `docs/schedule.md`. 선택 기능은 만들지 않음, 실험 축소, 필수 범위는 그대로 | 전원 | 확정(v1.2) |
+| D-30 | 선관위에 대한 투표 비밀 | 지수형 ElGamal 표(후보별 0/1 암호문 + 유효성 증명)를 세 기관 키의 합으로 암호화. Core가 암호문인 채로 더하고, 후보별 합계만 기관마다 증명이 붙은 조각을 보내 복호화. 통째의 키를 가진 곳이 없음. 체인·계약은 그대로 | 승민 | 확정(v1.6) |
 | D-29 | 공개 접속 | 스택은 데모 PC에서 실행. compose `web` 서비스(nginx: 빌드된 웹 + Core `/v1/`만)가 유일한 입구이고, 무료 **Tailscale Funnel**로 HTTPS 공개(팀 시험은 Tailscale Serve). 클라우드 호스팅 안 함 | 승민 | 확정(v1.3) |
 
 ---
@@ -296,3 +298,37 @@
   - 다른 PC에서 스택을 실행하는 것은 범위 밖(T14 삭제 유지, D-28). 설치한 Tailscale 버전을 기록(Funnel 회귀 사례 있음, 예: tailscale#20739). Funnel이 안 되면 다른 버전을 시도
   - 일정이 밀리면 11-23 Funnel 시험을 가장 먼저 뺌(`docs/schedule.md` 4절)
 - **영향**: `docker-compose.yml`, `web/Dockerfile`, `web/nginx.conf`, `.env.example`, `core/app/config.py`(링크 기본 주소), `docs/schedule.md`, `docs/threat-model.md`(P1), `README.md`
+
+### D-30. 선관위에 대한 투표 비밀 (v1.6 신규)
+- **배경:** D-08·D-23에서는 선거 개인키가 Core DB에 있음. 그래서 Core를 운영하는 쪽(선관위)이 개표 전에 표를 열어 중간 결과를 볼 수 있었음(위협 모델 S3). 블록체인은 무결성만 지켜 줌. 팀장이 가장 작은 동형 암호안(2026-11-11에 정리한 "A안")으로 이 빈틈을 막기로 결정함
+- **결정**
+  - 방식 `ELGAMAL_ED25519_V1`. 명세는 `contracts/ballot-elgamal.md`
+    - Ed25519 소수 위수 군 위의 지수형 ElGamal을 쓰고, 군 연산은 libsodium으로 함
+    - 후보마다 0 또는 1을 암호화한 암호문 하나를 만듦
+    - 후보마다 0/1 증명을 붙이고, 합이 1이라는 증명을 하나 붙임
+    - 모든 증명은 선거와 `H(credential)`에 묶임. 그래서 다른 투표권으로 복사한 표는 검증에 실패함
+    - 후보는 15명까지 가능함(`sealed_ballot` 3072바이트 제한)
+  - **열쇠**
+    - 각 기관이 `python -m app.scripts.trustee keygen`으로 자기 열쇠를 만들고 비밀값은 자기만 보관함
+    - 배포 쪽에서 공개 기록(소유 증명 포함)을 등록함(`app.scripts.register_trustee`)
+    - 선거 키는 세 공개키의 합이고, 체인의 `public_key_hash`로 고정됨
+    - Core는 비밀값을 갖지 않음. `private_key` 칸은 비어 있음
+  - **접수:** Core가 저장 전에 증명을 검사하고, 틀리면 400으로 거부함. 개표 때 한 번 더 검사함
+  - **개표**
+    1. Core가 유효한 표를 후보별로 더함
+    2. 각 기관의 trustee 도구가 `GET /v1/public/elections/{id}/tally-input`을 읽어 해시와 증명을 모두 다시 검사하고 합계를 직접 다시 계산함
+    3. 합계가 맞을 때만 증명이 붙은 조각을 보냄(`POST …/decryption-shares`). 로그인은 없고 증명이 곧 인증임. 도구는 Core의 목록이 Gateway의 수락된 BALLOT_RECEIVED 집합과 정확히 같은지(기관의 읽기 전용 auditorKey로 조회) 확인함. 그 표 전부의 바이트를 받아 유효한지 스스로 판단하고, 바이트가 없는 표는 `--allow-unavailable`로 허용할 때만 넘어감. 같은 선거에 다른 합계가 오면 거부함
+    4. 조각이 다 모이면 0부터 표 수까지 대입해 득표수를 찾음. TALLY_PUBLISHED·`ballot_set_root`·`result_hash`는 그대로임
+  - **R5:** 개인키를 공개하는 대신 TALLY 체크포인트부터 election_config 뷰에 조각을 보여 줌. `KEY_NOT_REVEALED`는 조각이 없다는 뜻이 됨. R5에서 증명·합계·조각을 검증하는 일은 Anik 담당이고, 대체되는 재복호화처럼 미구현 목록에 있음
+  - **되돌리기**
+    - `BALLOT_SCHEME=SEALED_BOX_V1`이면 새 선거에 D-08·D-23이 다시 적용됨. 선거는 만들어질 때의 방식을 유지함
+    - 이전 구현은 `sealedbox-baseline` 태그로 보관함
+    - 기존 DB에는 `core/db/migrations/001_elgamal.sql`을 한 번 적용해야 함. 칸과 테이블만 추가하고 아무것도 지우지 않음
+- **한계 (보고서에 밝힘)**
+  - 열쇠를 가진 사람이 서로 달라야 효과가 있음. 시연처럼 한 사람이 세 기관을 다 맡으면(`tools/trustees.sh`) 그 사람은 무엇이든 열 수 있음
+  - trustee 도구는 Core가 준 개표 대상 목록을 Gateway에 저장된 BALLOT_RECEIVED 이벤트와 대조하고, 선거마다 합계를 한 번만 복호화함. 그래서 선관위와 Gateway 운영 기관이 짜지 않는다는 전제가 필요함
+  - R5는 아직 증명·합계·조각을 검증하지 않음(미구현 목록, Anik)
+  - 암호화 직전의 선택은 브라우저에 있고, 시간 구간 연결 위험(S1)은 그대로임
+  - 증명은 직접 구현했고 외부 감사를 받지 않았음. 군 연산만 libsodium에서 가져옴
+  - 투표 웹의 암호 청크가 약 1MB임(libsodium sumo 빌드, 필요할 때 불러옴)
+- **영향:** `contracts/ballot-elgamal.md`(신규), `contracts/core-api.openapi.yaml`(v1.2.0), Core(`elgamal.py`, `elections.py`, `voting.py`, `tally.py`, `views.py`, `scripts/trustee.py`, `scripts/register_trustee.py`, DB 스키마·마이그레이션), 웹(`elgamal.ts`, `seal.ts`), `rules/purevoting_rules/engine.py`(R5 `KEY_NOT_REVEALED`), `tests/vectors/elgamal-vectors.json`, `docker-compose.yml`(`BALLOT_SCHEME`), `tools/trustees.sh`, 위협 모델 S1·S3, 표를 내는 스크립트(`tests/scenarios/T01/setup.py`와 README의 `tools/trustees.sh keygen` 단계, `core/devtools/demo_flow.py`, `rules/devtools/worker_smoke.py`)

@@ -7,12 +7,18 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 from nacl.public import PublicKey, SealedBox
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))   # D-30 ballots: core/app/elgamal.py
+from app import elgamal  # noqa: E402
+
 
 def wait(read, what, seconds=120):
     until = time.monotonic() + seconds
@@ -56,7 +62,11 @@ def smoke(url):
         info=wait(opened,"scheduled opening")
         credential=base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
         req("POST","/v1/credentials:redeem",200,json={"election_id":eid,"token":token,"nullifier_hash":hashlib.sha256(credential.encode()).hexdigest()})
-        sealed=SealedBox(PublicKey(base64.b64decode(info["public_key"]))).encrypt(json.dumps({"candidate_id":info["candidates"][0]["candidate_id"]}).encode())
+        nullifier=hashlib.sha256(credential.encode()).hexdigest()
+        if info.get("ballot_scheme")=="ELGAMAL_ED25519_V1":   # D-30: candidate index 0 in candidate_id order
+            sealed=elgamal.encrypt_ballot(base64.b64decode(info["public_key"]),eid,nullifier,len(info["candidates"]),sorted(c["candidate_id"] for c in info["candidates"]).index(info["candidates"][0]["candidate_id"]))
+        else:
+            sealed=SealedBox(PublicKey(base64.b64decode(info["public_key"]))).encrypt(json.dumps({"candidate_id":info["candidates"][0]["candidate_id"]}).encode())
         receipt=req("POST","/v1/ballots",201,json={"election_id":eid,"credential":credential,"sealed_ballot":base64.b64encode(sealed).decode()}).json()["receipt_hash"]
         k=req("GET",prefix,200,headers=h).json()["open_checkpoint"]
         wait(lambda: req("GET","/v1/public/receipts/"+receipt,200).json()["status"]=="ANCHORED","stand-in anchor")

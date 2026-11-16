@@ -1036,3 +1036,177 @@ def test_close_when_all_voted_refused_in_last_bucket(env):
         assert c.post(f"/v1/elections/{eid}:close", headers=auth).status_code == 409
     finally:
         settings.all_voted_close = False
+
+
+def test_elgamal_tally_with_organization_shares(env, tmp_path):
+    """D-30: ballots are ElGamal ciphertexts with proofs; the tally needs one verified share from every organization
+    and decrypts only the per-candidate sums."""
+    from app import elgamal
+    from app.scripts import register_trustee, trustee
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    orgs = ["org_commission", "org_neutral", "org_observer"]
+    start, end = t0 + 10 * B, t0 + 20 * B
+    body = {"title": "ElGamal", "window_start": iso(start), "window_end": iso(end), "time_bucket_seconds": B,
+            "checkpoint_interval_seconds": B, "candidates": [{"name": "Kim"}, {"name": "Lee"}, {"name": "Park"}],
+            "org_ids": orgs, "approval_threshold": 2}
+    settings.ballot_scheme = "ELGAMAL_ED25519_V1"
+    try:
+        with db.get_engine().begin() as conn:
+            conn.execute(text("DELETE FROM credential.trustees WHERE org_id = ANY(:o)"), {"o": orgs})
+        r = c.post("/v1/elections", headers=auth, json=body)
+        assert r.status_code == 422 and r.json()["code"] == "TRUSTEES_NOT_REGISTERED"
+        keys = {}
+        for org in orgs:
+            secret_file, public_file = tmp_path / f"{org}.secret.json", tmp_path / f"{org}.public.json"
+            assert trustee.main(["keygen", "--org", org, "--secret", str(secret_file)]) == 0
+            keys[org] = json.loads(secret_file.read_text())
+            public_file.write_text(json.dumps(keys[org]["record"]))
+            with pytest.raises(SystemExit):                     # a secret file is never registered
+                register_trustee.main(["--file", str(secret_file)])
+            assert register_trustee.main(["--file", str(public_file)]) == 0
+            assert register_trustee.main(["--file", str(public_file)]) == 0          # same key again: unchanged
+        r = c.post("/v1/elections", headers=auth, json=body | {"candidates": [{"name": f"C{i}"} for i in range(16)]})
+        assert r.status_code == 422                                                    # too many for the ballot size
+        eid = c.post("/v1/elections", headers=auth, json=body).json()["election_id"]
+    finally:
+        settings.ballot_scheme = "SEALED_BOX_V1"
+    with db.get_engine().connect() as conn:
+        row = conn.execute(text("SELECT private_key, trustee_keys FROM credential.elections WHERE election_id = :e"),
+                           {"e": eid}).one()
+    assert row.private_key is None and [t["org_id"] for t in row.trustee_keys] == orgs     # no whole key anywhere
+    c.put(f"/v1/elections/{eid}/roster", headers=auth,
+          json={"voters": [{"external_ref": f"g{i}", "name": "n"} for i in range(5)]})
+    clock.frozen = t0 + B
+    deliver_until_idle(eid)
+    assert c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth).status_code == 202
+    lines = c.post(f"/v1/elections/{eid}/tokens:issue", headers=auth, json={"delivery": "CSV"}).text.strip().splitlines()
+    tokens = [ln.rsplit("#t=", 1)[1] for ln in lines[1:]]
+    clock.frozen = start
+    scheduler_tick([eid])
+    deliver_until_idle(eid)
+    pub = c.get(f"/v1/public/elections/{eid}").json()
+    assert pub["ballot_scheme"] == "ELGAMAL_ED25519_V1"
+    Y = base64.b64decode(pub["public_key"])
+    ids = sorted(x["candidate_id"] for x in pub["candidates"])
+    assert Y == elgamal.joint_key([k["record"] for k in keys.values()])
+
+    clock.frozen = start + 5
+    creds = []
+    for tok in tokens:
+        cred = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode()
+        assert c.post("/v1/credentials:redeem", json={"election_id": eid, "token": tok,
+                                                      "nullifier_hash": hashing.H(cred)}).status_code == 200
+        creds.append(cred)
+
+    def cast(cred, raw):
+        return c.post("/v1/ballots", json={"election_id": eid, "credential": cred,
+                                           "sealed_ballot": base64.b64encode(raw).decode()})
+
+    ballot = {i: elgamal.encrypt_ballot(Y, eid, hashing.H(creds[i]), 3, choice) for i, choice in enumerate([0, 1, 0])}
+    assert cast(creds[3], ballot[0]).status_code == 400          # copied to another credential: proofs do not bind
+    tampered = bytearray(ballot[1])
+    tampered[6 + 32] ^= 1                                        # B of the first candidate changed
+    assert cast(creds[1], bytes(tampered)).status_code == 400
+    ones = [elgamal.encrypt_ballot(Y, eid, hashing.H(creds[4]), 3, j) for j in range(3)]
+    forged = ones[0][:6] + b"".join(ones[j][6 + 192 * j:6 + 192 * (j + 1)] for j in range(3)) + ones[0][-64:]
+    assert cast(creds[4], forged).status_code == 400             # 1 on every candidate: the sum proof fails
+    for i in range(3):
+        assert cast(creds[i], ballot[i]).status_code == 201
+    assert cast(creds[0], ballot[0]).status_code == 200          # identical retry
+
+    assert c.get(f"/v1/public/elections/{eid}/tally-input").status_code == 409             # not closed yet
+    clock.frozen = end
+    scheduler_tick([eid])
+    clock.frozen = end + B
+    deliver_until_idle(eid)
+    r = c.post(f"/v1/elections/{eid}/tally", headers=auth)
+    assert r.status_code == 409 and r.json()["code"] == "AWAITING_DECRYPTION_SHARES"
+    assert all(o in r.json()["detail"] for o in orgs)
+
+    tin = c.get(f"/v1/public/elections/{eid}/tally-input").json()
+    assert tin["valid_ballots"] == 3 and len(tin["ballots"]) == 3 and tin["missing_shares"] == orgs
+    ledger = {"ballots": {(ev["payload"]["nullifier_hash"], ev["payload"]["ballot_hash"])
+                          for ev in fake_gateway.state.events.values()
+                          if ev.get("election_id") == eid and ev["type"] == "BALLOT_RECEIVED" and "anchor" in ev},
+              "public_key_hash": hashing.H(Y)}
+    assert len(ledger["ballots"]) == 3 and len(tin["ballots"]) == 3
+    gw = TestClient(fake_gateway.app)
+    real_http = trustee._http
+    trustee._http = lambda method, url, body=None, headers=None: gw.get("/" + url.split("/", 3)[3]).json()
+    try:                                                          # the tool's own Gateway read gives the same view
+        assert trustee.ledger_view("http://gw", "k", eid, tin["final_checkpoint"]) == ledger
+    finally:
+        trustee._http = real_http
+    mine = keys["org_observer"]["record"]
+    agg = trustee.check(tin, mine, eid, ledger)                    # the tool's own recomputation agrees
+    one = elgamal.verify_ballot(ballot[1], Y, eid, hashing.H(creds[1]), 3)
+    with pytest.raises(SystemExit):                              # Core passing off one ballot as the sum
+        trustee.check(dict(tin, aggregate=[{"a": a.hex(), "b": b.hex()} for a, b in one]), mine, eid, ledger)
+    with pytest.raises(SystemExit):                              # a key that is not one of the election's
+        trustee.check(tin, elgamal.trustee_keygen("org_observer")[1], eid, ledger)
+    with pytest.raises(SystemExit):                              # answered for another election
+        trustee.check(tin, mine, "elc_" + "Z" * 26, ledger)
+    with pytest.raises(SystemExit):                              # a key other than the anchored one
+        trustee.check(tin, mine, eid, dict(ledger, public_key_hash="0" * 64))
+    # a dishonest Core: its own ballot (proofs fine, never on the ledger) added to isolate the others
+    nh = hashing.H("made-up credential")
+    extra = elgamal.encrypt_ballot(Y, eid, nh, 3, 2)
+    padded = dict(tin, ballots=tin["ballots"] + [{"nullifier_hash": nh, "ballot_hash": hashing.H(extra),
+                                                  "sealed_ballot": base64.b64encode(extra).decode()}])
+    with pytest.raises(SystemExit):
+        trustee.check(padded, mine, eid, ledger)
+    # or every ballot but the target left out, declared invalid, with the target's ciphertext as the "sum"
+    target = next(b for b in tin["ballots"] if b["ballot_hash"] == hashing.H(ballot[1]))
+    isolate = dict(tin, ballots=[target], valid_ballots=1, aggregate=[{"a": a.hex(), "b": b.hex()} for a, b in one],
+                   invalid_ballot_hashes=sorted(b["ballot_hash"] for b in tin["ballots"] if b is not target))
+    with pytest.raises(SystemExit):
+        trustee.check(isolate, mine, eid, ledger)
+    # or listed without bytes ("row missing"): refused unless a person allows that many after checking why
+    others = [b for b in tin["ballots"] if b is not target]
+    hidden = dict(isolate, ballots=[target] + [dict(b, sealed_ballot=None) for b in others])
+    with pytest.raises(SystemExit):
+        trustee.check(hidden, mine, eid, ledger)
+    assert trustee.check(hidden, mine, eid, ledger, allow_unavailable=2) == elgamal.aggregate([one], 3)
+    secret_path = str(tmp_path / "org_observer.secret.json")
+    trustee.remember(secret_path, eid, agg)
+    trustee.remember(secret_path, eid, agg)                      # the same sum again is fine
+    with pytest.raises(SystemExit):
+        trustee.remember(secret_path, eid, elgamal.aggregate([one], 3))
+
+    def share_of(org, x=None):
+        x = int.from_bytes(bytes.fromhex(keys[org]["secret"]), "little") if x is None else x
+        return elgamal.decryption_share(x, org, eid, agg)
+
+    url = f"/v1/public/elections/{eid}/decryption-shares"
+    assert c.post(url, json=share_of("org_observer", x=12345)).status_code == 422          # wrong secret
+    assert c.post(url, json=share_of("org_observer") | {"org_id": "org_other"}).status_code == 422
+    r = c.post(url, json=share_of("org_observer"))
+    assert r.status_code == 200 and r.json()["missing_shares"] == ["org_commission", "org_neutral"]
+    assert c.post(url, json=share_of("org_observer")).status_code == 200                   # again: replaced
+    assert c.post(url, json=share_of("org_neutral")).json()["missing_shares"] == ["org_commission"]
+    r = c.post(f"/v1/elections/{eid}/tally", headers=auth)
+    assert r.status_code == 409 and "org_commission" in r.json()["detail"]
+    assert c.post(url, json=share_of("org_commission")).json()["missing_shares"] == []
+
+    r = c.post(f"/v1/elections/{eid}/tally", headers=auth)
+    assert r.status_code == 200, r.text
+    t = r.json()
+    assert {x["candidate_id"]: x["votes"] for x in t["results"]} == {ids[0]: 2, ids[1]: 1, ids[2]: 0}
+    assert t["ballot_count"] == 3 and t["invalid_ballots"] == 0
+    assert c.post(url, json=share_of("org_commission")).status_code == 409                # TALLIED: no more shares
+    clock.frozen = end + 2 * B
+    deliver_until_idle(eid)
+    rk = {"X-Service-Key": RULE_KEY}
+    cps = c.get("/internal/v1/checkpoints", params={"election_id": eid}, headers=rk).json()["items"]
+    tally_cp = next(x for x in cps if x["reason"] == "TALLY")
+
+    def config(k):
+        return c.get("/internal/v1/views/election_config", params={"election_id": eid, "checkpoint": k},
+                     headers=rk).json()["rows"][0]
+    cfg = config(tally_cp["checkpoint"])
+    assert cfg["private_key"] is None and cfg["ballot_scheme"] == "ELGAMAL_ED25519_V1"
+    assert [s["org_id"] for s in cfg["decryption_shares"]] == orgs
+    assert config(tally_cp["checkpoint"] - 1)["decryption_shares"] is None
+    from app import schemas
+    for row in outbox_rows(eid):
+        assert schemas.errors("ledger-events.schema.json", "LedgerEventSubmission", row["event"]) == [], row["event"]

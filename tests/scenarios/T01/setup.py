@@ -30,6 +30,9 @@ from pathlib import Path
 import httpx
 import nacl.public
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "core"))   # D-30 ballots: core/app/elgamal.py
+from app import elgamal  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 RULES = ("R1", "R2", "R3", "R4", "R5")
 ORGS = ["org_commission", "org_neutral", "org_observer"]   # ascending by org_id (createElection orgIds order)
@@ -190,14 +193,21 @@ def run(a, rec: dict) -> None:
     rec["timings"]["open_after_window_start_s"] = round(time.time() - start, 1)
     log(f"OPEN {rec['timings']['open_after_window_start_s']} s after window_start")
 
-    pk = nacl.public.PublicKey(base64.b64decode(pub["public_key"]))
+    def seal(cand: str, credential: str) -> bytes:
+        """As the voter web: ElGamal ballot (D-30) or sealed box (SEALED_BOX_V1), by the election's scheme."""
+        pk = base64.b64decode(pub["public_key"])
+        if pub.get("ballot_scheme") == "ELGAMAL_ED25519_V1":
+            ids = sorted(x["candidate_id"] for x in pub["candidates"])
+            return elgamal.encrypt_ballot(pk, eid, H(credential), len(ids), ids.index(cand))
+        return nacl.public.SealedBox(nacl.public.PublicKey(pk)).encrypt(json.dumps({"candidate_id": cand}).encode())
+
     receipts = []
     for i in rng.sample(range(voters), votes):          # voter order and choice vary by seed (test-plan protocol)
         cand = rng.choice(pub["candidates"])["candidate_id"]
         credential = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode()
         expect(c.post("/v1/credentials:redeem",
                       json={"election_id": eid, "token": tokens[i], "nullifier_hash": H(credential)}), 200)
-        sealed = nacl.public.SealedBox(pk).encrypt(json.dumps({"candidate_id": cand}).encode())
+        sealed = seal(cand, credential)
         b = expect(c.post("/v1/ballots", json={"election_id": eid, "credential": credential,
                                                "sealed_ballot": base64.b64encode(sealed).decode()}), 201).json()
         receipts.append(b["receipt_hash"])

@@ -85,13 +85,19 @@ def rejected_attempts(conn, eid: str, k: int) -> list[dict]:
 
 
 def election_config(conn, eid: str, k: int, reveal_key: bool) -> list[dict]:
-    """reveal_key: the caller may see the private key (ruleKey or staff); it is shown only from the TALLY checkpoint on."""
+    """reveal_key: the caller may see the private key (ruleKey or staff); it is shown only from the TALLY checkpoint on.
+    ELGAMAL_ED25519_V1 (D-30) has no private key; its decryption shares are shown from the TALLY checkpoint on."""
     e = conn.execute(text("SELECT * FROM credential.elections WHERE election_id = :e"), {"e": eid}).mappings().one()
     h = conn.execute(text("SELECT status, window_end FROM credential.election_history WHERE election_id = :e "
                           "AND checkpoint <= :k ORDER BY checkpoint DESC LIMIT 1"), {"e": eid, "k": k}).one()
     tally_k = conn.execute(text("SELECT checkpoint FROM credential.checkpoints WHERE election_id = :e "
                                 "AND reason = 'TALLY'"), {"e": eid}).scalar()
     show = reveal_key and tally_k is not None and k >= tally_k
+    elgamal = e["ballot_scheme"] == "ELGAMAL_ED25519_V1"
+    shares = None
+    if elgamal and tally_k is not None and k >= tally_k:
+        shares = [r.share for r in conn.execute(text("SELECT share FROM credential.decryption_shares "
+                                                     "WHERE election_id = :e ORDER BY org_id"), {"e": eid})]
     return [{"view": "election_config", "row_key": "config", "status": h.status, "title": e["title"],
              "candidates": e["candidates"], "config_window_start": iso(from_dt(e["config_window_start"])),
              "config_window_end": iso(from_dt(e["config_window_end"])),
@@ -101,7 +107,8 @@ def election_config(conn, eid: str, k: int, reveal_key: bool) -> list[dict]:
              "public_key": hashing.b64std(bytes(e["public_key"])), "organizations": e["organizations"],
              "approval_threshold": e["approval_threshold"], "proposal_ttl_hours": e["proposal_ttl_hours"],
              "operator_org": e["operator_org"],
-             "private_key": hashing.b64std(bytes(e["private_key"])) if show else None}]
+             "private_key": hashing.b64std(bytes(e["private_key"])) if show and not elgamal else None,
+             "ballot_scheme": e["ballot_scheme"], "trustee_keys": e["trustee_keys"], "decryption_shares": shares}]
 
 
 _READERS = {"roster": roster, "token_status": token_status, "credential_issuance": credential_issuance,

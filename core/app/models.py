@@ -61,6 +61,18 @@ class BallotIn(Strict):
     sealed_ballot: str = Field(max_length=4096)
 
 
+class ShareItem(Strict):
+    d: str = Field(pattern=HEX64)
+    c: str = Field(pattern=HEX64)
+    z: str = Field(pattern=HEX64)
+
+
+class ShareIn(Strict):
+    """D-30 decryption share of one organization (contracts/ballot-elgamal.md)."""
+    org_id: str = Field(pattern=ORG)
+    shares: list[ShareItem] = Field(min_length=1, max_length=15)
+
+
 class AlertIn(Strict):
     election_id: str = Field(pattern=ELC)
     checkpoint: int = Field(ge=0)

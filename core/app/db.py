@@ -24,3 +24,9 @@ def get_engine() -> Engine:
 def ping() -> bool:
     with get_engine().connect() as conn:
         return conn.execute(text("SELECT 1")).scalar() == 1
+
+
+def schema_current() -> bool:
+    """The D-30 tables exist (an older database needs core/db/migrations/001_elgamal.sql)."""
+    with get_engine().connect() as conn:
+        return conn.execute(text("SELECT to_regclass('credential.decryption_shares') IS NOT NULL")).scalar()

@@ -3,12 +3,12 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app import elections, voting
+from app import elections, tally, voting
 from app.auth import Staff, issue_token, verify_password
 from app.config import settings
 from app.errors import Problem
 from app.gateway import GatewayUnavailable, get_gateway
-from app.models import BallotIn, LoginIn, RedeemIn
+from app.models import BallotIn, LoginIn, RedeemIn, ShareIn
 from app.store import load_election
 from app.tx import run, run_election
 
@@ -33,6 +33,18 @@ def ballots(body: BallotIn):
                                lambda c, e, t: voting.cast(c, e, body.credential, body.sealed_ballot, t),
                                missing=Problem(403, "CREDENTIAL_UNKNOWN"))
     return JSONResponse(_resolve_anchor(rec), status_code=status)
+
+
+@router.get("/v1/public/elections/{election_id}/tally-input", tags=["tally"])
+def tally_input(election_id: str):
+    """D-30: ballots, aggregate and missing shares, for the organizations' trustee tool (and anyone checking it)."""
+    return run(lambda c: tally.tally_input(c, load_election(c, election_id)))
+
+
+@router.post("/v1/public/elections/{election_id}/decryption-shares", tags=["tally"])
+def decryption_share(election_id: str, body: ShareIn):
+    """D-30: no login; the proofs against the organization's key in the election are the authentication."""
+    return run_election(election_id, lambda c, e, t: tally.submit_share(c, e, body.model_dump()))
 
 
 @router.get("/v1/public/receipts/{receipt_hash}", tags=["voter"])

@@ -346,7 +346,11 @@ function NextAction({ e, busy, run }: { e: Election; busy: boolean; run: (fn: ()
     case "CLOSED":
       return (
         <div className="space-y-3">
-          <p className="text-[14px] text-ink-3">선거 키를 공개하고 개표해요. 결과는 블록체인에 기록돼요.</p>
+          <p className="text-[14px] text-ink-3">
+            {e.ballot_scheme === "ELGAMAL_ED25519_V1"
+              ? "세 기관이 각자 trustee 도구로 복호화 조각을 보낸 뒤 개표해요. 후보별 합계만 열리고, 표 한 장 한 장은 누구도 열 수 없어요."
+              : "선거 키를 공개하고 개표해요. 결과는 블록체인에 기록돼요."}
+          </p>
           {api.capabilities.tally ? (
             <Button className="w-full" disabled={busy} onClick={() => run(() => api.tally(id), "개표를 마쳤어요")}>
               개표하기

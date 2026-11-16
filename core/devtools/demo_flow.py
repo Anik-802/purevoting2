@@ -20,7 +20,7 @@ import httpx
 import nacl.public
 from sqlalchemy import text
 
-from app import hashing
+from app import elgamal, hashing
 from app.auth import hash_password
 from app.config import settings
 from app.db import get_engine
@@ -171,7 +171,8 @@ def main() -> None:
     ok(f"상태 OPEN (Gateway가 개시 기록을 수락한 뒤에만 열림) · {clock()}")
 
     step(f"투표자 {VOTES}명 투표")
-    pk = nacl.public.PublicKey(base64.b64decode(pub["public_key"]))
+    pk = base64.b64decode(pub["public_key"])
+    ids = sorted(x["candidate_id"] for x in pub["candidates"])
     receipts = []
     for i in range(VOTES):
         cand = pub["candidates"][i % 2]
@@ -179,7 +180,11 @@ def main() -> None:
         nullifier = hashing.H(credential)
         expect(c.post("/v1/credentials:redeem",
                       json={"election_id": eid, "token": tokens[i], "nullifier_hash": nullifier}), 200)
-        sealed = nacl.public.SealedBox(pk).encrypt(json.dumps({"candidate_id": cand["candidate_id"]}).encode())
+        if pub.get("ballot_scheme") == "ELGAMAL_ED25519_V1":       # D-30, as the voter web
+            sealed = elgamal.encrypt_ballot(pk, eid, nullifier, len(ids), ids.index(cand["candidate_id"]))
+        else:
+            sealed = nacl.public.SealedBox(nacl.public.PublicKey(pk)).encrypt(
+                json.dumps({"candidate_id": cand["candidate_id"]}).encode())
         rec = expect(c.post("/v1/ballots", json={"election_id": eid, "credential": credential,
                                                  "sealed_ballot": base64.b64encode(sealed).decode()}), 201).json()
         receipts.append(rec["receipt_hash"])

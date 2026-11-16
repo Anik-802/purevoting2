@@ -41,6 +41,10 @@ services:
       CREATION_CHECK_MODE: ${CREATION_CHECK_MODE:-node}   # reads the pinned node; "stub" (dev only) assumes it matches
       VOTER_WEB_URL: ${VOTER_WEB_URL:-http://127.0.0.1:3000}   # the Funnel address when published (D-29)
       ALL_VOTED_CLOSE: ${ALL_VOTED_CLOSE:-true}   # decisions v1.5 (fake Gateway); the integration override defaults to false
+      # D-30: ElGamal ballots need the three organizations' keys registered first (tools/trustees.sh keygen);
+      # SEALED_BOX_V1 is the D-08 sealed box with the commission's key. An existing database needs
+      # core/db/migrations/001_elgamal.sql once.
+      BALLOT_SCHEME: ${BALLOT_SCHEME:-ELGAMAL_ED25519_V1}
     depends_on:
       db:
         condition: service_healthy

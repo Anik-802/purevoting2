@@ -23,6 +23,7 @@ def test_readyz_node_mode_without_chain_config(monkeypatch):
     from app import db
     from app.config import settings
     monkeypatch.setattr(db, "ping", lambda: None)
+    monkeypatch.setattr(db, "schema_current", lambda: True)
     monkeypatch.setattr(settings, "creation_check_mode", "node")
     monkeypatch.setattr(settings, "contract_address", "")
     monkeypatch.setattr(settings, "pinned_node_url", "http://node-observer:8545")
@@ -35,3 +36,13 @@ def test_readyz_node_mode_without_chain_config(monkeypatch):
     assert client.get("/readyz").status_code == 503
     monkeypatch.setattr(settings, "creation_check_mode", "stub")
     assert client.get("/readyz").json() == {"status": "ready"}
+
+
+def test_readyz_database_without_the_d30_migration(monkeypatch):
+    from app import db
+    from app.config import settings
+    monkeypatch.setattr(db, "ping", lambda: None)
+    monkeypatch.setattr(db, "schema_current", lambda: False)
+    monkeypatch.setattr(settings, "creation_check_mode", "stub")
+    r = client.get("/readyz")
+    assert r.status_code == 503 and r.json() == {"status": "db_migration_missing"}

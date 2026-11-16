@@ -9,7 +9,7 @@ import nacl.secret
 import nacl.utils
 from sqlalchemy import text
 
-from app import hashing, ledger, lifecycle, timeutil
+from app import elgamal, hashing, ledger, lifecycle, timeutil
 from app.config import settings
 from app.errors import Problem
 from app.gateway import GatewayUnavailable, get_gateway
@@ -66,8 +66,17 @@ def create(conn, staff, body: dict, now: int) -> str:
     if staff.org_id != operator:
         raise Problem(403, "FORBIDDEN", "only staff of the operator organization can create elections")
 
-    key = nacl.public.PrivateKey.generate()
-    public = bytes(key.public_key)
+    scheme, private, trustees = settings.ballot_scheme, None, None
+    if scheme == "ELGAMAL_ED25519_V1":
+        trustees = trustee_records(conn, org_ids)
+        if len(body["candidates"]) > elgamal.MAX_CANDIDATES:
+            raise Problem(422, "VALIDATION_ERROR", f"at most {elgamal.MAX_CANDIDATES} candidates (ElGamal ballot size)")
+        public = elgamal.joint_key(trustees)
+    elif scheme == "SEALED_BOX_V1":
+        key = nacl.public.PrivateKey.generate()
+        public, private = bytes(key.public_key), bytes(key)
+    else:
+        raise Problem(500, "INTERNAL_ERROR", "BALLOT_SCHEME is not a known scheme")
     candidates = sorted(({"candidate_id": ulid("cand"), "name": c["name"]} for c in body["candidates"]),
                         key=lambda c: c["candidate_id"])
     e = {
@@ -82,13 +91,14 @@ def create(conn, staff, body: dict, now: int) -> str:
     conn.execute(text(
         "INSERT INTO credential.elections (election_id, title, candidates, config_window_start, config_window_end, "
         "time_bucket_seconds, checkpoint_interval_seconds, organizations, approval_threshold, proposal_ttl_hours, "
-        "operator_org, public_key, private_key, public_key_hash, config_hash, created_at) "
+        "operator_org, ballot_scheme, public_key, private_key, trustee_keys, public_key_hash, config_hash, created_at) "
         "VALUES (:id, :title, CAST(:cand AS jsonb), :ws, :we, :b, :ci, CAST(:orgs AS jsonb), :thr, :ttl, :op, "
-        ":pub, :priv, :pkh, :ch, :now)"),
+        ":scheme, :pub, :priv, CAST(:trustees AS jsonb), :pkh, :ch, :now)"),
         {"id": e["election_id"], "title": e["title"], "cand": jsonb(candidates), "ws": to_dt(start), "we": to_dt(end),
          "b": b, "ci": interval, "orgs": jsonb(e["organizations"]), "thr": threshold, "ttl": e["proposal_ttl_hours"],
-         "op": operator, "pub": public, "priv": bytes(key), "pkh": e["public_key_hash"], "ch": e["config_hash"],
-         "now": to_dt(now)})
+         "op": operator, "scheme": scheme, "pub": public, "priv": private,
+         "trustees": None if trustees is None else jsonb(trustees), "pkh": e["public_key_hash"],
+         "ch": e["config_hash"], "now": to_dt(now)})
     conn.execute(text("INSERT INTO credential.seq_counters (election_id) VALUES (:e)"), {"e": e["election_id"]})
     set_status(conn, e, "DRAFT", 0)
     ledger.emit_system(conn, e, "ELECTION_CREATED", {
@@ -100,6 +110,18 @@ def create(conn, staff, body: dict, now: int) -> str:
     return e["election_id"]
 
 
+def trustee_records(conn, org_ids: list[str]) -> list[dict]:
+    """D-30: the registered key record of every organization, by org_id; each proof is checked again here."""
+    rows = {r.org_id: r.record for r in conn.execute(text("SELECT org_id, record FROM credential.trustees "
+                                                          "WHERE org_id = ANY(:o)"), {"o": org_ids})}
+    missing = sorted(set(org_ids) - rows.keys())
+    if missing:
+        raise Problem(422, "TRUSTEES_NOT_REGISTERED", ", ".join(missing))
+    if not all(elgamal.verify_trustee_key(rows[o]) and rows[o]["org_id"] == o for o in org_ids):
+        raise Problem(500, "INTERNAL_ERROR", "a registered trustee key does not verify")
+    return [rows[o] for o in sorted(org_ids)]
+
+
 def _active_keys(conn, eid: str) -> list[str]:
     return [r[0] for r in conn.execute(text("SELECT voter_key FROM credential.roster WHERE election_id = :e "
                                             "AND removed_checkpoint IS NULL"), {"e": eid})]
@@ -109,7 +131,7 @@ def to_public(e: dict) -> dict:
     return {"election_id": e["election_id"], "title": e["title"], "status": e["status"],
             "window_start": iso(e["window_start"]), "window_end": iso(e["window_end"]),
             "time_bucket_seconds": e["time_bucket_seconds"], "candidates": e["candidates"],
-            "public_key": hashing.b64std(bytes(e["public_key"]))}
+            "ballot_scheme": e["ballot_scheme"], "public_key": hashing.b64std(bytes(e["public_key"]))}
 
 
 def to_staff(conn, e: dict) -> dict:

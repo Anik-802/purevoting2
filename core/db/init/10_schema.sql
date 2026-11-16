@@ -29,8 +29,13 @@ CREATE TABLE credential.elections (
     approval_threshold          smallint NOT NULL CHECK (approval_threshold >= 2),
     proposal_ttl_hours          integer NOT NULL CHECK (proposal_ttl_hours BETWEEN 1 AND 168),
     operator_org                text NOT NULL,               -- from the on-chain registry, never from the login
-    public_key                  bytea NOT NULL CHECK (octet_length(public_key) = 32),   -- X25519 (D-08)
-    private_key                 bytea NOT NULL CHECK (octet_length(private_key) = 32),  -- revealed from TALLY (D-23)
+    ballot_scheme               text NOT NULL DEFAULT 'SEALED_BOX_V1'
+                                    CHECK (ballot_scheme IN ('SEALED_BOX_V1', 'ELGAMAL_ED25519_V1')),   -- D-30
+    public_key                  bytea NOT NULL CHECK (octet_length(public_key) = 32),   -- X25519 (D-08) or the ElGamal joint key (D-30)
+    private_key                 bytea CHECK (octet_length(private_key) = 32),  -- SEALED_BOX_V1 only, revealed from TALLY (D-23)
+    trustee_keys                jsonb,                       -- ELGAMAL_ED25519_V1: [{org_id, public_key, proof}] by org_id
+    CONSTRAINT elections_scheme_keys CHECK ((ballot_scheme = 'SEALED_BOX_V1') = (private_key IS NOT NULL)
+                                            AND (ballot_scheme = 'ELGAMAL_ED25519_V1') = (trustee_keys IS NOT NULL)),
     public_key_hash             char(64) NOT NULL,
     config_hash                 char(64) NOT NULL,
     creation_check              text NOT NULL DEFAULT 'PENDING' CHECK (creation_check IN ('PENDING', 'PASSED', 'MISMATCH')),
@@ -188,6 +193,24 @@ CREATE TABLE credential.staff_users (
     password_hash  text NOT NULL,
     org_id         text NOT NULL,
     role           text NOT NULL CHECK (role IN ('admin', 'approver', 'auditor'))
+);
+
+-- D-30: each organization's ElGamal public key with its proof of knowledge, registered by the deployment setup script
+-- (app.scripts.register_trustee); the secret stays with the organization.
+CREATE TABLE credential.trustees (
+    org_id         text PRIMARY KEY,
+    record         jsonb NOT NULL,                           -- {org_id, public_key, proof} as made by the trustee tool
+    registered_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- D-30: verified decryption shares of the per-candidate aggregates, one per organization; anyone may submit, the proof
+-- against the organization's registered key is the authentication.
+CREATE TABLE credential.decryption_shares (
+    election_id  text NOT NULL REFERENCES credential.elections ON DELETE CASCADE,
+    org_id       text NOT NULL,
+    share        jsonb NOT NULL,                             -- {org_id, shares: [{d, c, z}] in candidate_id order}
+    received_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (election_id, org_id)
 );
 
 RESET ROLE;

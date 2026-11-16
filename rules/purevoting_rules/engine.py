@@ -46,7 +46,7 @@ R5_UNIMPLEMENTED = (
     "Read pinned-node anchorAt and independently verify event/rejection Merkle proofs and roots",
     "Replay full election state and compare electionStateAtCheckpoint and electionGovernance getters",
     "Recompute all roster/token/config roots and verify revealed key derivation and commitment",
-    "Decrypt ledger-accepted sealed ballots and independently reproduce tally results and invalid set",
+    "Decrypt ledger-accepted sealed ballots, or for ElGamal elections verify every ballot proof, the sums and the decryption shares, and independently reproduce tally results and invalid set",
 )
 OBSERVED_KEYS = {
     "R1": "accepted_duplicate_tokens accepted_duplicate_nullifiers unknown_tokens unknown_nullifiers used_then_revoked refused_duplicates".split(),
@@ -443,7 +443,11 @@ def _r5(s: dict, events: list[dict], rejections: list[dict], out: dict, refs: li
     current = _checkpoint(s, events)
     key_missing = False
     if current["payload"]["reason"] == "TALLY":
-        key_missing = config["private_key"] is None
+        # D-30: an ElGamal election has no private key; the decryption shares are shown from TALLY instead
+        if config.get("ballot_scheme") == "ELGAMAL_ED25519_V1":
+            key_missing = config.get("decryption_shares") is None
+        else:
+            key_missing = config["private_key"] is None
         tally_events = [e for e in events if e["type"] == "TALLY_PUBLISHED" and e["checkpoint"] == s["checkpoint"]]
         out["tally_root_mismatches"] = 0
         for event in tally_events:

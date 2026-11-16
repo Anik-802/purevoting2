@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # decisions v1.5 close once every voter has voted; off unless chosen (docker-compose.yml turns it on for the fake
     # Gateway; the integration stack needs a contract deployed from this version, then ALL_VOTED_CLOSE=true)
     all_voted_close: bool = False
+    # D-30 scheme of new elections: SEALED_BOX_V1 (D-08, the commission's key) or ELGAMAL_ED25519_V1 (organizations'
+    # keys, registered first with app.scripts.register_trustee); docker-compose.yml chooses ElGamal
+    ballot_scheme: str = "SEALED_BOX_V1"
     # background loops (scheduler, outbox worker); tests drive them by hand
     run_workers: bool = True
 

@@ -79,6 +79,10 @@ async function call<T>(method: string, path: string, opts: { body?: unknown; aut
       sessionStorage.removeItem(SESSION);
       location.assign("/admin/login");
     }
+    if (code === "AWAITING_DECRYPTION_SHARES") {
+      const missing = (p.detail ?? "").replace(/^.*missing from /, "");
+      throw new ApiError(code, `기관마다 복호화 조각을 보내야 개표할 수 있어요. 아직 안 보낸 기관: ${missing}`);
+    }
     throw new ApiError(code, KO[code] ?? p.detail ?? p.title ?? `요청이 실패했어요 (${res.status})`);
   }
   if (opts.text) return (await res.text()) as T;
@@ -126,7 +130,7 @@ export async function submitBallot(election_id: string, credential: string, cand
   let sealed = localStorage.getItem(key);
   if (!sealed) {
     if (!e.candidates.some((c) => c.candidate_id === candidate_id)) throw new ApiError("VALIDATION_ERROR", "후보를 다시 선택해 주세요.");
-    sealed = await (await import("../crypto/seal")).sealBallot(e.public_key, candidate_id);
+    sealed = await (await import("../crypto/seal")).sealBallot(e, candidate_id, await H(credential));
   }
   localStorage.setItem(key, sealed);
   const receipt = await call<BallotReceipt>("POST", "/v1/ballots", { body: { election_id, credential, sealed_ballot: sealed } });

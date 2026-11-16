@@ -45,6 +45,8 @@ tags:
   - name: elections
   - name: admin-actions
   - name: audit
+  - name: tally
+    description: 'D-30 decryption shares of ElGamal elections (organizations'' trustee tool)'
   - name: internal
 
 paths:
@@ -138,6 +140,9 @@ paths:
         Every refused request is recorded in the `rejected_attempts` view. Nullifiers are unique per election. The
         idempotency check comes before the window check: an identical retry after close still returns 200 with the
         original receipt.
+        ELGAMAL_ED25519_V1 (D-30): after those checks the ballot's proofs must verify for this election's key and
+        H(credential) (contracts/ballot-elgamal.md), otherwise 400 VALIDATION_ERROR (a malformed request, not recorded
+        as a rejected attempt).
       security: []
       requestBody:
         required: true
@@ -154,7 +159,7 @@ paths:
                   type: string
                   contentEncoding: base64
                   maxLength: 4096
-                  description: 'libsodium sealed box of {"candidate_id": "..."} with the election public key (D-08)'
+                  description: 'SEALED_BOX_V1: libsodium sealed box of {"candidate_id": "..."} with the election public key (D-08). ELGAMAL_ED25519_V1: the ballot of contracts/ballot-elgamal.md, bound to H(credential) (D-30)'
       responses:
         '201':
           description: Accepted
@@ -166,6 +171,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BallotReceipt' }
+        '400':
+          description: VALIDATION_ERROR (not base64, size, or ELGAMAL_ED25519_V1 proofs that do not verify)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
         '403':
           description: CREDENTIAL_UNKNOWN
           content:
@@ -202,6 +212,77 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── auth ─────────────────────────────
+  /v1/public/elections/{election_id}/tally-input:
+    get:
+      tags: [tally]
+      operationId: getTallyInput
+      summary: 'D-30 (ELGAMAL_ED25519_V1): the ballots that count, their aggregate and the decryption shares still missing'
+      description: |
+        Available once the election is CLOSED and the tally preconditions of runTally hold (else 409 as runTally), and
+        afterwards. `ballots` lists every ledger-ACCEPTED ballot (checkpoint <= CLOSE_FINAL) in ballot_hash order, with
+        its bytes, or `sealed_ballot` null when the row is missing or does not match its event / hash; `aggregate` is
+        the per-candidate sum (candidate_ids order) of those whose proofs verify. Each organization's trustee tool
+        requires the list to equal the Gateway's stored events, decides validity itself from the bytes, refuses null
+        bytes unless a person allows them, and recomputes the sum before it decrypts (ballot-elgamal.md section 4).
+        Ciphertexts reveal no choice without every organization's key; no login.
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      responses:
+        '200':
+          description: Tally input
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TallyInput' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: INVALID_STATE_TRANSITION (not closed, or a sealed-box election) or OUTBOX_NOT_DRAINED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
+  /v1/public/elections/{election_id}/decryption-shares:
+    post:
+      tags: [tally]
+      operationId: submitDecryptionShare
+      summary: 'D-30: one organization''s decryption share of the aggregate (while CLOSED)'
+      description: |
+        No login: the Chaum-Pedersen proofs against the organization's key in the election (trustee_keys) are the
+        authentication. Stored once they verify against the current aggregate; a later valid share of the same
+        organization replaces it (D is the same, only the proof's randomness differs). runTally needs one from every
+        organization of the election.
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/ElectionIdPath' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecryptionShare' }
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [org_id, missing_shares]
+                properties:
+                  org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+                  missing_shares: { type: array, items: { $ref: './common.schema.json#/$defs/OrgId' } }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: INVALID_STATE_TRANSITION (not CLOSED, no valid ballot, or a sealed-box election) or OUTBOX_NOT_DRAINED
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+        '422':
+          description: VALIDATION_ERROR (not a trustee of the election, or the proofs do not verify)
+          content:
+            application/problem+json:
+              schema: { $ref: './common.schema.json#/$defs/Problem' }
+
   /v1/auth/login:
     post:
       tags: [auth]
@@ -259,7 +340,7 @@ paths:
               schema: { $ref: '#/components/schemas/Election' }
         '400': { $ref: '#/components/responses/Problem' }
         '422':
-          description: ORG_NOT_REGISTERED (an org_id is not in the registry) or VALIDATION_ERROR
+          description: ORG_NOT_REGISTERED (an org_id is not in the registry), TRUSTEES_NOT_REGISTERED (D-30, an org_id has no trustee key while the deployment's BALLOT_SCHEME is ELGAMAL_ED25519_V1; detail lists them) or VALIDATION_ERROR (also more than 15 candidates for ELGAMAL_ED25519_V1)
           content:
             application/problem+json:
               schema: { $ref: './common.schema.json#/$defs/Problem' }
@@ -501,6 +582,12 @@ paths:
         to agentKey) and to staff, so that the Rule Engine and auditors can re-decrypt every ballot and recompute the result
         (R5). It is not published to the general public. Ballots are anonymous, so revealing the key after tally exposes no voter choice
         unless S1/S2 links exist (threat-model).
+        ELGAMAL_ED25519_V1 (D-30) instead: there is no private key. A ballot is invalid when its row or hash does not
+        match or its proofs do not verify (ballot-elgamal.md); the valid ballots' ciphertexts are added per candidate
+        and only those sums are decrypted, with one verified decryption share per organization of the election
+        (submitDecryptionShare). Until every share is in: 409 AWAITING_DECRYPTION_SHARES (detail lists the missing
+        org_ids). No share is needed when no ballot is valid. The shares the tally used appear in the election_config
+        view from the TALLY checkpoint on, so the Rule Engine re-verifies the result instead of re-decrypting.
       security: [{ bearer: [admin] }]
       parameters:
         - { $ref: '#/components/parameters/ElectionIdPath' }
@@ -512,7 +599,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Tally' }
         '409':
-          description: INVALID_STATE_TRANSITION, OUTBOX_NOT_DRAINED or LEDGER_UNAVAILABLE
+          description: INVALID_STATE_TRANSITION, OUTBOX_NOT_DRAINED, LEDGER_UNAVAILABLE or AWAITING_DECRYPTION_SHARES (D-30)
           content:
             application/problem+json:
               schema: { $ref: './common.schema.json#/$defs/Problem' }
@@ -1483,7 +1570,78 @@ components:
         candidates:
           type: array
           items: { $ref: '#/components/schemas/Candidate' }
-        public_key: { type: string, contentEncoding: base64, description: X25519 public key for sealed boxes }
+        ballot_scheme: { type: string, enum: [SEALED_BOX_V1, ELGAMAL_ED25519_V1], description: 'D-30: how the browser seals the ballot (absent from earlier Cores = SEALED_BOX_V1)' }
+        public_key: { type: string, contentEncoding: base64, description: 'SEALED_BOX_V1: X25519 public key for sealed boxes; ELGAMAL_ED25519_V1: the joint ElGamal key (Ed25519 point, ballot-elgamal.md)' }
+
+    TrusteeKey:
+      type: object
+      additionalProperties: false
+      required: [org_id, public_key, proof]
+      description: 'D-30: an organization''s ElGamal public key X (hex, Ed25519 point) with a Schnorr proof of knowledge of its secret (ballot-elgamal.md)'
+      properties:
+        org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+        public_key: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        proof:
+          type: object
+          additionalProperties: false
+          required: [c, z]
+          properties:
+            c: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+            z: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+
+    DecryptionShare:
+      type: object
+      additionalProperties: false
+      required: [org_id, shares]
+      description: 'D-30: D_j = x * A_j for every aggregate A_j (candidate_ids order) with a Chaum-Pedersen proof (c, z); 32-byte values as 64 hex chars (ballot-elgamal.md)'
+      properties:
+        org_id: { $ref: './common.schema.json#/$defs/OrgId' }
+        shares:
+          type: array
+          minItems: 1
+          maxItems: 15
+          items:
+            type: object
+            additionalProperties: false
+            required: [d, c, z]
+            properties:
+              d: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+              c: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+              z: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+
+    TallyInput:
+      type: object
+      additionalProperties: false
+      required: [election_id, ballot_scheme, final_checkpoint, public_key, trustee_keys, candidate_ids, ballots, aggregate, valid_ballots, invalid_ballot_hashes, missing_shares]
+      properties:
+        election_id: { $ref: './common.schema.json#/$defs/ElectionId' }
+        ballot_scheme: { const: ELGAMAL_ED25519_V1 }
+        final_checkpoint: { $ref: './common.schema.json#/$defs/Checkpoint' }
+        public_key: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        trustee_keys: { type: array, items: { $ref: '#/components/schemas/TrusteeKey' } }
+        candidate_ids: { type: array, items: { $ref: './common.schema.json#/$defs/CandidateId' } }
+        ballots:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [nullifier_hash, ballot_hash, sealed_ballot]
+            properties:
+              nullifier_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+              ballot_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+              sealed_ballot: { anyOf: [ { type: string, contentEncoding: base64 }, { type: 'null' } ], description: null when Core has no row matching the event }
+        aggregate:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [a, b]
+            properties:
+              a: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+              b: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+        valid_ballots: { type: integer, minimum: 0 }
+        invalid_ballot_hashes: { type: array, items: { $ref: './common.schema.json#/$defs/Sha256Hex' } }
+        missing_shares: { type: array, items: { $ref: './common.schema.json#/$defs/OrgId' } }
 
     ElectionCreate:
       type: object
@@ -1819,7 +1977,14 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Candidate' }
         public_key: { type: string, contentEncoding: base64 }
-        private_key: { anyOf: [ { type: string, contentEncoding: base64 }, { type: 'null' } ] }
+        private_key: { anyOf: [ { type: string, contentEncoding: base64 }, { type: 'null' } ], description: 'SEALED_BOX_V1 only; always null for ELGAMAL_ED25519_V1 (D-30), which has no whole private key' }
+        ballot_scheme: { type: string, enum: [SEALED_BOX_V1, ELGAMAL_ED25519_V1], description: 'D-30 (v1.2.0). Absent from rows of earlier Cores = SEALED_BOX_V1' }
+        trustee_keys:
+          description: 'D-30: ELGAMAL_ED25519_V1 only, the organizations'' key records ({org_id, public_key, proof}, ballot-elgamal.md) whose sum is public_key; null for SEALED_BOX_V1'
+          anyOf: [ { type: array, items: { $ref: '#/components/schemas/TrusteeKey' } }, { type: 'null' } ]
+        decryption_shares:
+          description: 'D-30: ELGAMAL_ED25519_V1 only, non-null iff k >= the TALLY checkpoint: the verified shares the tally used, by org_id (empty when no ballot was valid)'
+          anyOf: [ { type: array, items: { $ref: '#/components/schemas/DecryptionShare' } }, { type: 'null' } ]
         config_window_start: { $ref: './common.schema.json#/$defs/Timestamp', description: window_start at creation (hashed in config_hash) }
         config_window_end: { $ref: './common.schema.json#/$defs/Timestamp', description: window_end at creation (hashed in config_hash) }
         proposal_ttl_hours: { type: integer, minimum: 1, maximum: 168 }

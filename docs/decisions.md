@@ -1,4 +1,4 @@
-# Design decisions (v1.5)
+# Design decisions (v1.6)
 
 > 2026-10-18 v1.0: after a supervisor review (DECISIONS VERDICT: READY TO CONFIRM) every item except D-02 and D-15 is
 > **confirmed as recommended**. Wording added at confirmation is marked **Confirmed note (v1.0)**. D-02 is delegated to
@@ -24,6 +24,10 @@
 > 2026-11-11 v1.5: D-11 exception — once every voter has voted (every ACTIVE voter has a token, every token used, every
 > credential has a ballot; not in the last bucket) the operator admin may close before window_end without a proposal (ELECTION_CLOSED reason ALL_VOTED); no
 > voter can lose a vote; R4 is to re-check the condition (not implemented yet, Anik). Team-lead decision.
+> 2026-11-12 v1.6: new D-30 — ballots become exponential ElGamal ciphertexts under a key shared by the three
+> organizations, with validity proofs; only per-candidate sums are decrypted, one share per organization; no whole
+> private key exists (D-08 and D-23 kept for elections with `BALLOT_SCHEME=SEALED_BOX_V1`, the rollback setting).
+> Team-lead decision; the earlier implementation stays tagged `sealedbox-baseline`.
 > History: drafts v0.1–v0.18 were revised after supervisor reviews 1–17; the Korean original with the full history is
 > `decisions.ko.md`. If the two differ, this English version applies (D-19).
 
@@ -38,7 +42,7 @@
 | D-05 | Languages | Python (FastAPI) servers, TypeScript (React) web; Solidity contract (EVM, D-02) | All | Confirmed |
 | D-06 | Database | PostgreSQL, **one database, two schemas** (credential / ballot, different DB roles); Rule Engine and AI have no DB access | Seungmin | Confirmed |
 | D-07 | Anonymous credential | **The browser generates the credential**; the server registers only its hash (in the same transaction as the link use) | Seungmin | Confirmed |
-| D-08 | Ballot encryption | Sealed with the election public key (libsodium sealed box), decrypted after closing | Seungmin | Confirmed |
+| D-08 | Ballot encryption | Sealed with the election public key (libsodium sealed box), decrypted after closing (v1.6: replaced by D-30 unless `BALLOT_SCHEME=SEALED_BOX_V1`) | Seungmin | Confirmed (v1.6: superseded by D-30 by default) |
 | D-09 | Lost link / credential | **A used link is never re-enabled.** Only a lost unused link is reissued after approval (TOKEN_REISSUE, optional). A lost credential = abstention | Seungmin | Confirmed |
 | D-10 | Voter-side time precision | Ledger and views keep only bucketed times and checkpoint numbers (bucket 60 s in the web, not enforced per roster size since v1.4); window bounds aligned to buckets | Seungmin, Harits, Anik | Confirmed (v1.4 change) |
 | D-11 | Approvals | Roster amendment, link reissue, window change, early close, void: approval by **threshold** orgs other than the requester, each signing with its own key; signatures verified on chain (v1.5: no approval for a close once every voter has voted) | Harits, Seungmin | Confirmed (v1.5 exception) |
@@ -53,12 +57,13 @@
 | D-20 | Contract change process | PRs only, owners notified, no mandatory approval | All | Confirmed |
 | D-21 | Organization signing keys | Each org's node account registers its own key in the **on-chain registry**; the commission cannot set keys; approvers keep their org's key | Harits, Seungmin | Confirmed |
 | D-22 | Who judges voter-side violations | Per-event checks (window, duplicates) in Gateway software; the chain checks batch time ranges and system events (state machine, approval signatures) | Harits | Confirmed |
-| D-23 | Election private key | MVP: held by the commission, **revealed after the tally** so auditors can recount (R5); threshold decryption is future work | Seungmin | Confirmed |
+| D-23 | Election private key | MVP: held by the commission, **revealed after the tally** so auditors can recount (R5); threshold decryption is future work (v1.6: D-30 has no whole private key) | Seungmin | Confirmed (v1.6: SEALED_BOX_V1 only) |
 | D-24 | Finalization and review authority | Rule Engine records findings on the ledger; FAIL / INCONCLUSIVE resolved only by signed reviews of ≥ threshold orgs **other than the operator**; the contract checks at finalization; AI reports optional | Seungmin, Anik, Harits | Confirmed |
 | D-25 | Rule Engine operator | ruleKey held and operated by an org other than the commission and the Gateway operator (demo: observer, v1.1) | All | Confirmed (v1.1) |
 | D-26 | Gateway operator | Neutral org. It can delay relaying but cannot forge signed approvals, reviews or findings; signers can submit directly on chain | Harits | Confirmed |
 | D-27 | Confirmation depth | A chain item counts only in a block with ≥ D blocks on top (D = 2, *provisional*); pinned like the contract address | Harits, Seungmin, Anik | Confirmed (v1.1) |
 | D-28 | Schedule compression | Demo version 2026-11-19, everything finished by 2026-11-30; milestones M1–M3, per-owner dates, handoffs and fallbacks in `docs/schedule.md`; optional features not built; experiment reduced; mandatory scope unchanged | All | Confirmed (v1.2) |
+| D-30 | Ballot secrecy against the commission | Exponential ElGamal ballots (one 0/1 ciphertext per candidate with validity proofs) under the sum of the three organizations' keys; Core adds them up and only the per-candidate sums are decrypted, each organization sending a proven share; nobody holds a whole key; chain and contract unchanged | Seungmin | Confirmed (v1.6) |
 | D-29 | Public access | Stack stays on the demo PC; the compose `web` service (nginx: built web + Core `/v1/` only) is the only entry, published over HTTPS by a free **Tailscale Funnel** (team tests: Tailscale Serve); no cloud hosting | Seungmin | Confirmed (v1.3) |
 
 ---
@@ -442,3 +447,50 @@
   - If the schedule slips, the 11-23 Funnel test is the first thing dropped (`docs/schedule.md` section 4).
 - **Affects:** `docker-compose.yml`, `web/Dockerfile`, `web/nginx.conf`, `.env.example`, `core/app/config.py` (default
   link base), `docs/schedule.md`, `docs/threat-model.md` (P1), `README.md`
+
+### D-30. Ballot secrecy against the commission (v1.6)
+- **Background:** under D-08 / D-23 the election private key sits in Core's database, so whoever operates Core (the
+  commission) can open every ballot before the tally and see the running result (threat model S3). The blockchain only
+  protects integrity. The team lead decided to close this gap with the smallest homomorphic scheme ("option A" of
+  2026-11-11).
+- **Decision**
+  - Scheme `ELGAMAL_ED25519_V1`, specified in `contracts/ballot-elgamal.md`: exponential ElGamal over the Ed25519
+    prime-order group (libsodium group operations), one ciphertext per candidate encrypting 0 or 1, a disjunctive
+    Chaum-Pedersen proof per candidate and a proof that they add up to 1, all bound to the election and to
+    `H(credential)` (a copied ballot does not verify). At most 15 candidates (3072-byte `sealed_ballot`).
+  - **Keys:** each organization of the election makes its own key with `python -m app.scripts.trustee keygen` and keeps
+    the secret; the deployment registers the public record with its proof of knowledge
+    (`app.scripts.register_trustee`). The election key is the sum; `public_key_hash` on chain anchors it. Core never
+    holds a secret: `private_key` stays empty.
+  - **Submission:** Core verifies the proofs before storing (else 400); the tally verifies them again.
+  - **Tally:** Core adds the valid ballots per candidate. Each organization's trustee tool reads
+    `GET /v1/public/elections/{id}/tally-input`, re-checks every hash and proof, recomputes the sums and only then sends
+    its share with a proof (`POST …/decryption-shares`, no login: the proof is the authentication). The tool also
+    requires Core's list to be exactly the Gateway's accepted BALLOT_RECEIVED set (read with the organization's
+    auditorKey), gets the bytes of every one of them and decides validity itself (a ballot without bytes only with
+    `--allow-unavailable`), and refuses a second, different sum for the same election. With all shares the
+    counts are found by trying 0 … ballots; TALLY_PUBLISHED, `ballot_set_root` and `result_hash` are unchanged.
+  - **R5:** instead of a revealed key the election_config view shows the shares from the TALLY checkpoint
+    (`KEY_NOT_REVEALED` = shares missing). Verifying the proofs, sums and shares in R5 is Anik's work (listed as not
+    implemented, like the re-decryption it replaces).
+  - **Rollback:** `BALLOT_SCHEME=SEALED_BOX_V1` restores D-08 / D-23 for new elections; elections keep the scheme they
+    were created with. The previous implementation is tagged `sealedbox-baseline`. An existing database needs
+    `core/db/migrations/001_elgamal.sql` once (adds columns and tables, deletes nothing).
+- **Limits (stated in the report):**
+  - The guarantee needs separate key holders. When one person runs all three trustees (the demo,
+    `tools/trustees.sh`), that person can decrypt anything.
+  - The trustee tool compares Core's ballot list with the Gateway's stored BALLOT_RECEIVED events and decrypts one
+    sum per election, so the protection assumes the commission and the Gateway operator do not collude.
+  - R5 does not verify the proofs, sums and shares yet (listed as not implemented, Anik).
+  - The browser still sees the choice before encrypting it, and the bucketed time link (S1) is unchanged.
+  - The proofs are implemented here and not audited; only the group operations come from libsodium.
+  - The ballot chunk of the voter web is about 1 MB (libsodium "sumo" build, loaded lazily).
+- **Affects:**
+  - Contracts: `contracts/ballot-elgamal.md` (new), `contracts/core-api.openapi.yaml` (v1.2.0).
+  - Core: `core/app/elgamal.py`, `elections.py`, `voting.py`, `tally.py`, `views.py`, `scripts/trustee.py`,
+    `scripts/register_trustee.py`, `core/db/init/10_schema.sql`, `core/db/migrations/001_elgamal.sql`.
+  - Web and rules: `web/src/crypto/elgamal.ts`, `seal.ts`, `rules/purevoting_rules/engine.py` (R5 `KEY_NOT_REVEALED`).
+  - Vectors, deployment and docs: `tests/vectors/elgamal-vectors.json`, `docker-compose.yml` (`BALLOT_SCHEME`),
+    `tools/trustees.sh`, threat model S1 / S3.
+  - Scripts that cast ballots: `tests/scenarios/T01/setup.py` (and its README step `tools/trustees.sh keygen`),
+    `core/devtools/demo_flow.py`, `rules/devtools/worker_smoke.py`.

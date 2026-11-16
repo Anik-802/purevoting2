@@ -9,7 +9,7 @@ import binascii
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from app import hashing, ledger, timeutil
+from app import elgamal, hashing, ledger, timeutil
 from app.elections import Refused
 from app.errors import Problem
 from app.ids import random_id
@@ -70,6 +70,10 @@ def cast(conn, e: dict, credential: str, sealed_b64: str, t: int) -> tuple[int, 
         raise Refused(403, "CREDENTIAL_UNKNOWN", subject_hash=nullifier_hash)
     if not _is_open(e, t):
         raise Refused(409, "ELECTION_NOT_OPEN", subject_hash=nullifier_hash)
+    if e["ballot_scheme"] == "ELGAMAL_ED25519_V1" and elgamal.verify_ballot(
+            sealed, bytes(e["public_key"]), eid, nullifier_hash, len(e["candidates"])) is None:
+        # D-30: a ballot that is not one 1 and the rest 0 never enters (its proofs bind it to this credential)
+        raise Problem(400, "VALIDATION_ERROR", "sealed_ballot proofs do not verify")
 
     payload = {"nullifier_hash": nullifier_hash, "ballot_hash": ballot_hash, "receipt_hash": receipt_hash}
     # the ballot row stores its BALLOT_RECEIVED event_id; row and event are written in this one transaction

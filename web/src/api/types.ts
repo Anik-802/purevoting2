@@ -19,6 +19,8 @@ export interface PublicElection {
   window_end: string;
   time_bucket_seconds: number;
   candidates: Candidate[];
+  /** D-30; absent from earlier Cores = SEALED_BOX_V1 */
+  ballot_scheme?: "SEALED_BOX_V1" | "ELGAMAL_ED25519_V1";
   public_key: string;
 }
 

@@ -84,4 +84,7 @@ def readyz():
         return JSONResponse(status_code=503, content={"status": "db_unavailable"})
     if creation_check.node_config_missing():
         return JSONResponse(status_code=503, content={"status": "chain_config_missing"})
+    if not db.schema_current():
+        # D-30: a database created before it needs core/db/migrations/001_elgamal.sql once
+        return JSONResponse(status_code=503, content={"status": "db_migration_missing"})
     return {"status": "ready"}
