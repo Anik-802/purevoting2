@@ -477,8 +477,8 @@
     `--allow-unavailable`), and refuses a second, different sum for the same election. With all shares the
     counts are found by trying 0 … ballots; TALLY_PUBLISHED, `ballot_set_root` and `result_hash` are unchanged.
   - **R5:** instead of a revealed key the election_config view shows the shares from the TALLY checkpoint
-    (`KEY_NOT_REVEALED` = shares missing). Verifying the proofs, sums and shares in R5 is Anik's work (listed as not
-    implemented, like the re-decryption it replaces).
+    (`KEY_NOT_REVEALED` = shares missing). The R5 checks of the proofs, sums and shares are specified in
+    `contracts/ballot-elgamal.md` section 6 (2026-11-16, contracts v1.2.2) and are Anik's work.
   - **Rollback:** `BALLOT_SCHEME=SEALED_BOX_V1` restores D-08 / D-23 for new elections; elections keep the scheme they
     were created with. The previous implementation is tagged `sealedbox-baseline`. An existing database needs
     `core/db/migrations/001_elgamal.sql` once (adds columns and tables, deletes nothing).
@@ -487,7 +487,7 @@
     `tools/trustees.sh`), that person can decrypt anything.
   - The trustee tool compares Core's ballot list with the Gateway's stored BALLOT_RECEIVED events and decrypts one
     sum per election, so the protection assumes the commission and the Gateway operator do not collude.
-  - R5 does not verify the proofs, sums and shares yet (listed as not implemented, Anik).
+  - R5 does not verify the proofs, sums and shares yet: specified (ballot-elgamal.md section 6), not implemented (Anik).
   - The browser still sees the choice before encrypting it, and the bucketed time link (S1) is unchanged.
   - The proofs are implemented here and not audited; only the group operations come from libsodium.
   - The ballot chunk of the voter web is about 1 MB (libsodium "sumo" build, loaded lazily).

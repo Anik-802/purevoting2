@@ -1,4 +1,4 @@
-# ElGamal ballots (D-30, contracts v1.2.0)
+# ElGamal ballots (D-30, contracts v1.2.0; R5 checks v1.2.2)
 
 Scheme `ELGAMAL_ED25519_V1`. No party holds a key that opens a single ballot: each organization of the election keeps
 its own secret, the election key is the sum of their public keys, and only the per-candidate sums are decrypted, with
@@ -49,7 +49,7 @@ Sum proof that `Σ m_j = 1`: `A* = Σ A_j`, `B* = Σ B_j`, `R = Σ r_j`, random 
 Bytes: `"PVE1"` · `u16(n)` · for each j: `A_j B_j c_0 c_1 z_0 z_1` (192 bytes) · `c z` (64 bytes);
 length `6 + 192·n + 64`.
 
-Verification (Core at submitBallot and at tally, the trustee tool; R5 is to do the same, not implemented yet): exact length and header, valid points and
+Verification (Core at submitBallot and at tally, the trustee tool, R5 at the TALLY checkpoint: section 6): exact length and header, valid points and
 canonical scalars, for each j `c_0 + c_1 == Hs("bit", ctx…, u16(j), A_j, B_j, z_0·G − c_0·A_j, z_0·Y − c_0·B_j,
 z_1·G − c_1·A_j, z_1·Y − c_1·(B_j − G))`, and `c == Hs("sum", ctx…, A*, B*, z·G − c·A*, z·Y − c·(B* − G))`.
 
@@ -68,9 +68,8 @@ z_1·G − c_1·A_j, z_1·Y − c_1·(B_j − G))`, and `c == Hs("sum", ctx…, 
    `c == Hs("share", …, z·G − c·X, z·A_j − c·D_j)` against `X` of that organization in the election).
 3. With a verified share from every organization: `M_j = B_j − Σ_i D_ij = votes_j·G`, `votes_j` found by trying
    0 … number of valid ballots. TALLY_PUBLISHED is unchanged (results, counts, `ballot_set_root`, `result_hash`).
-4. From the TALLY checkpoint the election_config view carries `decryption_shares`, so the Rule Engine (R5) can verify
-   every ballot proof, the aggregate, every share proof and the result without any key. Today R5 only waits for them
-   (`KEY_NOT_REVEALED` = shares missing) and lists the verification as not implemented (Anik).
+4. From the TALLY checkpoint the election_config view carries `decryption_shares`, so the Rule Engine (R5) verifies
+   every ballot proof, the aggregate, every share proof and the result without any key (section 6).
 
 ## 5. What it does and does not give (threat-model S3)
 
@@ -85,3 +84,97 @@ z_1·G − c_1·A_j, z_1·Y − c_1·(B_j − G))`, and `c == Hs("sum", ctx…, 
   separate key holders.
 - The browser still sees the choice before encrypting it, and the bucketed time link (threat-model S1) is unchanged.
 - The cryptography is implemented here, not taken from an audited library (only the group operations are libsodium).
+
+## 6. R5 checks for ElGamal elections (Rule Engine, contracts v1.2.2)
+
+For an election with `ballot_scheme = ELGAMAL_ED25519_V1` these checks replace two checks of the sealed box in the R5
+row of `contracts/README.md`: the re-decryption with the revealed private key, and the check of that key against
+`public_key_hash`. The other R5 checks stay as they are, including `ballot_set_root` and `result_hash`. R5 uses only
+inputs it already reads, with no key and no new Core call.
+
+**Inputs at checkpoint k**
+
+| Input | Fields used | Encoding |
+|---|---|---|
+| `election_config` view | `public_key` (Y), `organizations`, `candidates`, `trustee_keys`, `decryption_shares` | `public_key` base64 (standard) of 32 bytes; points and scalars in `trustee_keys` and the shares 64-char hex |
+| `ballot_receipts` rows | `event_id`, `row_key` (the nullifier_hash), `ballot_hash`, `receipt_hash`, `sealed_ballot` | `row_key` 64-char hex, `sealed_ballot` base64 |
+| accepted BALLOT_RECEIVED events | | |
+| ELECTION_CREATED | `public_key_hash` | |
+| TALLY_PUBLISHED of checkpoint k (TALLY only) | `final_checkpoint`, `invalid_ballot_hashes`, `results` | |
+
+**Checks**, in this order. Step 1 runs at every checkpoint. Steps 2–4 run only at the TALLY checkpoint, and their
+keys are null at other checkpoints.
+
+1. **Keys** → `key_mismatch`. One count for each failing item:
+   - `trustee_keys` has exactly one record per organization of `organizations`, in org_id order;
+   - each record's proof verifies (section 2);
+   - `Σ X_i = Y`;
+   - `H(Y)` over the 32 raw bytes equals `public_key_hash` of ELECTION_CREATED.
+
+   If `key_mismatch > 0`, steps 2–4 are skipped and their keys are null. The rule is already a FAIL.
+2. **Ballots** → `tally_invalid_set_mismatches`.
+   - Exactly one TALLY_PUBLISHED must be at checkpoint k. Otherwise R5 is INCONCLUSIVE (`OTHER`, the summary says
+     "TALLY_PUBLISHED missing at the TALLY checkpoint" or "more than one"), and the keys of steps 2–4 are null.
+   - The ballots of the tally are every accepted BALLOT_RECEIVED with checkpoint ≤ `final_checkpoint`, as in Core.
+   - A ballot goes to the invalid set I when any of these holds:
+     - it has no row with its `event_id`;
+     - the row's (`row_key`, `ballot_hash`, `receipt_hash`) differs from the event's (`nullifier_hash`, `ballot_hash`,
+       `receipt_hash`);
+     - `H(sealed_ballot) ≠ ballot_hash`;
+     - its proofs fail (section 3, with `ctx = (election_id, the event's nullifier_hash, Y)` and `n` = number of
+       candidates).
+
+     Every other ballot is in the valid set V. The first three cases are also FAILs through `row_ledger_mismatches` or
+     `sealed_hash_mismatches`.
+   - `tally_invalid_set_mismatches` is the size of the symmetric difference between I and TALLY
+     `invalid_ballot_hashes`, compared as multisets of ballot_hash. Duplicates are kept, as in Core.
+3. **Shares** → `tally_share_failures`.
+   - If `decryption_shares` is null, R5 is INCONCLUSIVE `KEY_NOT_REVEALED`, unchanged, and
+     `tally_share_failures` and `tally_result_mismatches` are null.
+   - **If V is empty**, no share is needed. Core sends no share and publishes 0 votes, and `decryption_shares` is `[]`.
+     Each entry that is there anyway counts as one failure.
+   - Otherwise the aggregate is recomputed per candidate as `(Σ A_j, Σ B_j)` over V. Each organization of the election
+     must have exactly one share in `decryption_shares`, matched by org_id. The share must verify against that
+     organization's X in `trustee_keys` and the recomputed aggregate (section 4, step 2). When an aggregate `A_j` is
+     the identity, its `D_j` must be the identity too.
+   - `tally_share_failures` counts each organization whose share is missing, duplicated or not verifying, and each
+     share of an org_id that is not an organization of the election.
+   - If `tally_share_failures > 0`, step 4 is skipped and `tally_result_mismatches` is null.
+4. **Result** → `tally_result_mismatches`.
+   - If V is empty, every candidate is expected to have 0 votes.
+   - Otherwise `M_j = Σ B_j − Σ_i D_ij`, summed over the shares of the election's organizations only. `votes_j` is
+     found by trying 0 … |V| (`0·G` is the identity).
+   - `tally_result_mismatches` counts:
+     - each candidate whose votes differ from TALLY `results` (matched by candidate_id) or are not found in that range;
+     - a candidate missing from `results` counts as 0 votes there;
+     - each `results` entry whose candidate_id appears twice or is not a candidate of the election.
+
+Any non-zero key of steps 1–4 is a FAIL. With these checks the TALLY decryption check has no unimplemented part for
+ElGamal elections. This does not cover the `result_hash` recomputation or `TALLY.final_checkpoint ≠ CLOSE_FINAL` in
+R5. When the ElGamal item is removed from the "not implemented" list, those two must either be implemented or stay
+listed.
+
+**Implementation**
+
+- The group operations need libsodium. Use `pynacl==1.5.0`, the same version as Core:
+  - functions in `nacl.bindings`: `crypto_core_ed25519_add`, `crypto_core_ed25519_sub`,
+    `crypto_core_ed25519_is_valid_point`, `crypto_scalarmult_ed25519_noclamp`,
+    `crypto_scalarmult_ed25519_base_noclamp`;
+  - add it to `rules/requirements.txt` and to `rules/requirements-lock.txt` (with `cffi` and `pycparser`), because
+    the Docker image installs from the lock file.
+- Two cases need the guards of `base()` and `mul()` in `core/app/elgamal.py`:
+  - scalar multiplication raises an error for the scalar 0 or the identity point;
+  - `is_valid_point` is False for the identity.
+
+  Port those guards as they are.
+- The Rule Engine is implemented in `rules/` and does not import Core. Porting the verification functions of
+  `core/app/elgamal.py` is fine.
+- It must reproduce `tests/vectors/elgamal-vectors.json` (trustee proofs, joint key, ballots, aggregate, shares, votes).
+  That file has only valid ballots, so the Rule Engine's tests must also cover:
+  - an invalid ballot;
+  - an altered share;
+  - forged `results`;
+  - an identity aggregate;
+  - an election with no valid ballot.
+- Cost in the demo (100 voters, a few candidates): one ballot verification per ballot plus 3 share verifications per
+  candidate. That is well under a second.

@@ -320,7 +320,7 @@
     2. 각 기관의 trustee 도구가 `GET /v1/public/elections/{id}/tally-input`을 읽어 해시와 증명을 모두 다시 검사하고 합계를 직접 다시 계산함
     3. 합계가 맞을 때만 증명이 붙은 조각을 보냄(`POST …/decryption-shares`). 로그인은 없고 증명이 곧 인증임. 도구는 Core의 목록이 Gateway의 수락된 BALLOT_RECEIVED 집합과 정확히 같은지(기관의 읽기 전용 auditorKey로 조회) 확인함. 그 표 전부의 바이트를 받아 유효한지 스스로 판단하고, 바이트가 없는 표는 `--allow-unavailable`로 허용할 때만 넘어감. 같은 선거에 다른 합계가 오면 거부함
     4. 조각이 다 모이면 0부터 표 수까지 대입해 득표수를 찾음. TALLY_PUBLISHED·`ballot_set_root`·`result_hash`는 그대로임
-  - **R5:** 개인키를 공개하는 대신 TALLY 체크포인트부터 election_config 뷰에 조각을 보여 줌. `KEY_NOT_REVEALED`는 조각이 없다는 뜻이 됨. R5에서 증명·합계·조각을 검증하는 일은 Anik 담당이고, 대체되는 재복호화처럼 미구현 목록에 있음
+  - **R5:** 개인키를 공개하는 대신 TALLY 체크포인트부터 election_config 뷰에 조각을 보여 줌. `KEY_NOT_REVEALED`는 조각이 없다는 뜻이 됨. R5에서 증명·합계·조각을 검증하는 방법은 `contracts/ballot-elgamal.md` 6절에 정함(2026-11-16, 계약 v1.2.2). 구현은 Anik 담당
   - **되돌리기**
     - `BALLOT_SCHEME=SEALED_BOX_V1`이면 새 선거에 D-08·D-23이 다시 적용됨. 선거는 만들어질 때의 방식을 유지함
     - 이전 구현은 `sealedbox-baseline` 태그로 보관함
@@ -328,7 +328,7 @@
 - **한계 (보고서에 밝힘)**
   - 열쇠를 가진 사람이 서로 달라야 효과가 있음. 시연처럼 한 사람이 세 기관을 다 맡으면(`tools/trustees.sh`) 그 사람은 무엇이든 열 수 있음
   - trustee 도구는 Core가 준 개표 대상 목록을 Gateway에 저장된 BALLOT_RECEIVED 이벤트와 대조하고, 선거마다 합계를 한 번만 복호화함. 그래서 선관위와 Gateway 운영 기관이 짜지 않는다는 전제가 필요함
-  - R5는 아직 증명·합계·조각을 검증하지 않음(미구현 목록, Anik)
+  - R5는 아직 증명·합계·조각을 검증하지 않음(규격은 ballot-elgamal.md 6절, 구현은 Anik)
   - 암호화 직전의 선택은 브라우저에 있고, 시간 구간 연결 위험(S1)은 그대로임
   - 증명은 직접 구현했고 외부 감사를 받지 않았음. 군 연산만 libsodium에서 가져옴
   - 투표 웹의 암호 청크가 약 1MB임(libsodium sumo 빌드, 필요할 때 불러옴)

@@ -76,7 +76,9 @@ the observer org (`org_observer`, D-25 v1.1; the registry setup script's default
      - sealed-ballot hash;
      - roots;
      - anchors read from the pinned node;
-     - at TALLY: `ballot_set_root`, re-decryption with the revealed key, `result_hash`;
+     - at TALLY: `ballot_set_root`, `result_hash`, and by ballot scheme: re-decryption with the revealed key
+       (SEALED_BOX_V1) or the proofs, shares and sums of `contracts/ballot-elgamal.md` section 6 (ELGAMAL_ED25519_V1,
+       the default since D-30);
      - `electionStateAtCheckpoint`;
      - `governance_mismatch`;
      - checkpoint cadence.
