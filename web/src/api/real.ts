@@ -8,6 +8,7 @@ import {
   type Election,
   type ElectionCreate,
   type Finding,
+  type IssueResult,
   type PublicElection,
   type RosterSummary,
   type RosterVoter,
@@ -187,16 +188,28 @@ export const readRoster = async (id: string) => (await call<{ voters: RosterVote
 
 export const freezeRoster = (id: string) => call<Election>("POST", `/v1/elections/${enc(id)}/roster:freeze`, { auth: true });
 
-/** CSV (external_ref,name,link); the same Idempotency-Key is reused for 14 of the contract's 15 minutes, so a lost
- * response returns the same CSV */
-export async function issueTokens(id: string): Promise<string> {
-  const slot = `pv_issue_${id}`;
-  const saved = JSON.parse(sessionStorage.getItem(slot) ?? "null") as { key: string; at: number } | null;
+/** delivery EMAIL: CSV (external_ref,name,link) plus the link email summary; the same Idempotency-Key is reused for 14
+ * of the contract's 15 minutes, so a lost response returns the same CSV and sends no email again. While the first
+ * request is still sending (email null) the key is kept, so pressing again shows its summary. */
+type IssueSlot = { key: string; at: number; pending?: boolean };
+const issueSlot = (id: string) => `pv_issue_${id}`;
+const savedSlot = (id: string) => JSON.parse(sessionStorage.getItem(issueSlot(id)) ?? "null") as IssueSlot | null;
+
+export async function issueTokens(id: string): Promise<IssueResult> {
+  const slot = issueSlot(id);
+  const saved = savedSlot(id);
   const key = saved && Date.now() - saved.at < 14 * 60_000 ? saved.key : idemKey();
   sessionStorage.setItem(slot, JSON.stringify({ key, at: saved?.key === key ? saved.at : Date.now() }));
-  const csv = await call<string>("POST", `/v1/elections/${enc(id)}/tokens:issue`, { auth: true, headers: { "Idempotency-Key": key }, body: { delivery: "CSV" }, text: true });
-  sessionStorage.removeItem(slot);
-  return csv;
+  const out = await call<IssueResult>("POST", `/v1/elections/${enc(id)}/tokens:issue`, { auth: true, headers: { "Idempotency-Key": key }, body: { delivery: "EMAIL" } });
+  if (out.email !== null) sessionStorage.removeItem(slot);
+  else sessionStorage.setItem(slot, JSON.stringify({ ...savedSlot(id), pending: true }));
+  return out;
+}
+
+/** true while the kept key belongs to a request that was still sending emails: pressing again shows its summary */
+export function issuePending(id: string): boolean {
+  const saved = savedSlot(id);
+  return !!saved?.pending && Date.now() - saved.at < 14 * 60_000;
 }
 
 type StoredFinding = { finding_id: string; rule_id: Finding["rule_id"]; result: Finding["result"]; checkpoint: number; summary: string; inconclusive_reason?: string; review: { status: string } };

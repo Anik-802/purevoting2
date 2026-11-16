@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Election, RosterVoter, VoterInput } from "../api/types";
+import type { ApiError, Election, LinkEmailSummary, RosterVoter, VoterInput } from "../api/types";
 import { Button, Card } from "../ui";
 
 // ───────────── roster upload (DRAFT) ─────────────
@@ -243,25 +243,46 @@ export function RosterCard({ e, onChange }: { e: Election; onChange: () => void 
 
 type LinkRow = { external_ref: string; name: string };
 
+const PROBLEM: Record<NonNullable<LinkEmailSummary["problem"]>, string> = {
+  CONNECT_FAILED: "메일 서버에 연결하지 못했어요. 못 받은 사람은 CSV로 전달하세요.",
+  LOGIN_FAILED: "Gmail 로그인에 실패했어요. 앱 비밀번호를 확인하세요.",
+  TIME_LIMIT: "시간 제한으로 일부는 보내지 못했어요. 못 받은 사람은 CSV로 전달하세요.",
+  TOO_MANY_DISCONNECTS: "메일 서버 연결이 여러 번 끊겨 일부는 보내지 못했어요. 못 받은 사람은 CSV로 전달하세요.",
+};
+
 export function LinkDeliveryCard({ e, onChange }: { e: Election; onChange: () => void }) {
   const [csv, setCsv] = useState("");
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [copied, setCopied] = useState("");
+  // undefined: nothing issued here yet; null: result unknown (lost-response retry while the first request still sends)
+  const [mail, setMail] = useState<LinkEmailSummary | null>();
+  const [mailFailed, setMailFailed] = useState<Set<string>>(new Set());
+  const [error, setError] = useState("");
 
   const template = `[${e.title}] 투표 안내\n1회용 투표 링크입니다. 이 링크를 가진 사람은 누구나 한 번 투표할 수 있으니 다른 사람에게 전달하지 마세요.\n투표 기간: ${new Date(e.window_start).toLocaleString("ko-KR")} ~ ${new Date(e.window_end).toLocaleString("ko-KR")}\n링크: {링크}`;
 
   async function issue() {
     setBusy(true);
     setNote("");
+    setError("");
     try {
-      const text = await api.issueTokens(e.election_id);
+      const { csv: text, email } = await api.issueTokens(e.election_id);
       if (!text) {
         setNote("새로 발급할 유권자가 없어요. 링크 원문은 처음 발급할 때만 받을 수 있어요.");
         return;
       }
       setCsv(text);
+      setMail(email);
+      setMailFailed(new Set());
+      if (email?.failed_voter_keys.length) {
+        // the summary names voters by voter_key only; the roster turns them into student numbers for this screen
+        const keys = new Set(email.failed_voter_keys);
+        api.readRoster(e.election_id)
+          .then((voters) => setMailFailed(new Set(voters.filter((v) => keys.has(v.voter_key)).map((v) => v.external_ref ?? ""))))
+          .catch(() => undefined);
+      }
       setLinks(
         parseCsv(text)
           .slice(1)
@@ -269,6 +290,10 @@ export function LinkDeliveryCard({ e, onChange }: { e: Election; onChange: () =>
       );
       download(`${e.election_id}-links.csv`, text);
       onChange();
+    } catch (err) {
+      // a lost response (network, proxy 502/503/504) may hide links already issued: the same key brings them back
+      const lost = ["NETWORK", "HTTP_502", "HTTP_503", "HTTP_504"].includes((err as ApiError).code);
+      setError(`${(err as Error).message}${lost ? " 15분 안에 다시 누르면 새 링크를 만들지 않고 처음 결과(같은 CSV, 메일은 다시 보내지 않음)를 받아요." : ""}`);
     } finally {
       setBusy(false);
     }
@@ -281,8 +306,8 @@ export function LinkDeliveryCard({ e, onChange }: { e: Election; onChange: () =>
   }
 
   const steps = [
-    ["링크 발급", "유권자마다 1회용 링크를 만들어 CSV로 받아요. 서버에는 링크의 해시만 남아요."],
-    ["각자에게 전달", "CSV의 링크를 문자·메일·메신저로 해당 유권자에게만 보내요. 아래 안내 문구를 쓰면 돼요."],
+    ["링크 발급", "유권자마다 1회용 링크를 만들어 CSV로 받아요. 메일 설정이 돼 있으면 이메일이 있는 사람에게 바로 메일로도 보내요. 서버에는 링크의 해시만 남아요."],
+    ["각자에게 전달", "메일을 못 받은 사람(이메일 없음·발송 실패)에게는 CSV의 링크를 문자·메신저로 그 사람에게만 보내요. 아래 안내 문구를 쓰면 돼요."],
     ["투표 시작", "시작 시각이 되면 링크를 연 유권자가 휴대폰에서 바로 투표해요."],
   ];
 
@@ -306,19 +331,28 @@ export function LinkDeliveryCard({ e, onChange }: { e: Election; onChange: () =>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button disabled={busy} onClick={issue}>
-          {e.counters.tokens_active + e.counters.tokens_used > 0 ? "추가 유권자 링크 발급" : `링크 발급 · CSV 받기 (${e.voter_count}명)`}
+          {api.issuePending(e.election_id) ? "발송 결과 보기" : e.counters.tokens_active + e.counters.tokens_used > 0 ? "추가 유권자 링크 발급" : `링크 발급 (${e.voter_count}명)`}
         </Button>
         {csv && (
           <Button variant="secondary" onClick={() => download(`${e.election_id}-links.csv`, csv)}>
             CSV 다시 받기
           </Button>
         )}
-        <Button variant="ghost" disabled title="인증·전달 방법은 다음 단계에서 검토해요">
-          메일로 보내기 (준비 중)
-        </Button>
       </div>
+      {mail !== undefined && (
+        <p className={`mt-3 rounded-xl p-3 text-[14px] ${mail?.configured && !mail.failed && !mail.no_address ? "bg-ok-soft text-ok" : "bg-surface text-ink-2"}`}>
+          {mail === null
+            ? "아직 메일을 보내는 중이에요. 잠시 뒤 '발송 결과 보기'를 누르면 결과를 볼 수 있어요(새 링크는 만들지 않아요)."
+            : !mail.configured
+              ? "메일 설정이 안 돼 있어요. CSV로 직접 전달하세요."
+              : `메일 발송: 보냄 ${mail.sent}명 · 실패 ${mail.failed}명 · 이메일 없음 ${mail.no_address}명${mail.failed || mail.no_address ? " (이 사람들은 CSV로 직접 전달하세요)" : ""}`}
+          {mail?.problem && <span className="mt-1 block font-semibold">{PROBLEM[mail.problem]}</span>}
+          {mail?.configured && mail.sent > 0 && <span className="mt-1 block">메일이 안 왔다는 사람에게는 스팸함도 확인해 달라고 하세요.</span>}
+        </p>
+      )}
+      {error && <p className="mt-3 rounded-xl bg-danger-soft p-3 text-[14px] text-danger">{error}</p>}
       <p className="mt-3 rounded-xl bg-warn-soft p-3 text-[13px] text-warn">
-        이 CSV를 가진 사람은 누구든 해당 유권자 대신 투표할 수 있어요(시스템이 막지 못해요). 링크 원문은 이 CSV에만 있으니 안전한 곳에 보관하고, 전달이 끝나면 지우세요. 링크를 복사해서 보내면 클립보드 기록에도 남을 수 있어요.
+        이 CSV를 가진 사람은 누구든 해당 유권자 대신 투표할 수 있어요(시스템이 막지 못해요). 링크 원문은 이 CSV와 보낸 메일에만 있으니 CSV는 안전한 곳에 보관하고, 전달이 끝나면 지우세요. 링크를 복사해서 보내면 클립보드 기록에도 남을 수 있어요.
       </p>
       {note && <p className="mt-3 text-[14px] text-ink-3">{note}</p>}
 
@@ -340,7 +374,7 @@ export function LinkDeliveryCard({ e, onChange }: { e: Election; onChange: () =>
               <li key={l.external_ref} className="flex items-center gap-3 border-b border-line px-4 py-2 last:border-0">
                 <span className="mono w-24 shrink-0 text-ink-3">{l.external_ref}</span>
                 <span className="min-w-0 flex-1 truncate">{l.name}</span>
-                <span className="shrink-0 text-[13px] text-ok">발급됨</span>
+                {mailFailed.has(l.external_ref) ? <span className="shrink-0 text-[13px] text-danger">메일 실패</span> : <span className="shrink-0 text-[13px] text-ok">발급됨</span>}
               </li>
             ))}
           </ul>

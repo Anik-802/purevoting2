@@ -6,6 +6,7 @@ import {
   type Election,
   type ElectionCreate,
   type Finding,
+  type IssueResult,
   type PublicElection,
   type RosterSummary,
   type RosterVoter,
@@ -236,8 +237,9 @@ export async function freezeRoster(id: string): Promise<Election> {
   return { ...e };
 }
 
-/** CSV with columns external_ref,name,link (delivery = CSV); empty when everyone already has a link */
-export async function issueTokens(id: string): Promise<string> {
+/** CSV with columns external_ref,name,link (empty when everyone already has a link); the mock has no mail account, so the
+ * email summary always says "not configured" */
+export async function issueTokens(id: string): Promise<IssueResult> {
   await wait();
   const e = find(id);
   if (e.creation_check !== "PASSED" || (e.status !== "ROSTER_FROZEN" && e.status !== "OPEN"))
@@ -246,7 +248,8 @@ export async function issueTokens(id: string): Promise<string> {
   issued.set(id, done);
   const voters = rosters.get(id) ?? Array.from({ length: e.voter_count }, (_, i) => ({ voter_key: `vtr_demo${i}`, status: "ACTIVE" as const, external_ref: `voter-${String(i + 1).padStart(3, "0")}`, name: `투표자 ${i + 1}` }));
   const todo = voters.filter((v) => v.status === "ACTIVE" && !done.has(v.voter_key));
-  if (!todo.length) return "";
+  const email = { configured: false, sent: 0, failed: 0, no_address: 0, failed_voter_keys: [], problem: null };
+  if (!todo.length) return { csv: "", email };
   todo.forEach((v) => done.add(v.voter_key));
   e.counters.tokens_active += todo.length;
   // CSV cells: neutralise spreadsheet formulas, quote when needed (the real Core must do the same)
@@ -254,9 +257,15 @@ export async function issueTokens(id: string): Promise<string> {
     const s = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  // token: 22-char base64url (hashing.md token_hash); Idempotency-Key and {delivery: "CSV"} come with the real client
+  // token: 22-char base64url (hashing.md token_hash); Idempotency-Key and {delivery: "EMAIL"} come with the real client
   const token = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return ["external_ref,name,link", ...todo.map((v) => [v.external_ref ?? "", v.name ?? "", `${location.origin}/vote/${id}#t=${token()}`].map(q).join(","))].join("\n");
+  const csv = ["external_ref,name,link", ...todo.map((v) => [v.external_ref ?? "", v.name ?? "", `${location.origin}/vote/${id}#t=${token()}`].map(q).join(","))].join("\n");
+  return { csv, email };
+}
+
+/** the mock never sends, so no request is ever left sending */
+export function issuePending(_id: string): boolean {
+  return false;
 }
 
 export async function openElection(id: string) {

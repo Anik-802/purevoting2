@@ -48,7 +48,8 @@ organization and never creates findings; it only relays signatures made in the s
 2. **Roster and links:**
    - Roster PUT only in DRAFT.
    - Freeze no longer applies the D-10 sizing rule (decisions v1.4; the web fixes the bucket at 60 s).
-   - Issue tokens (CSV, with Idempotency-Key retry for 15 min). Only `token_hash` is stored.
+   - Issue tokens (CSV, with Idempotency-Key retry for 15 min). Only `token_hash` is stored. With `delivery: EMAIL` (the
+     admin web) the links are also emailed after the commit (4.4).
 3. **Voting:**
    - `redeem` locks the token, marks it USED and inserts `nullifier_hash` into the `ballot` schema, all in **one transaction**. No column links the two.
    - `ballots`: idempotent retry (same ballot → 200 with the original receipt); window check after the idempotency check; `rejected_attempts` for refusals.
@@ -97,7 +98,7 @@ organization and never creates findings; it only relays signatures made in the s
   3. Seal the ballot with the public key (libsodium sealed box), store it, then submit.
   4. Show the receipt and check it (`receipt_hash` computed locally); its status becomes ANCHORED when Core sees the BALLOT_RECEIVED anchored (poll Gateway `GET /v1/events/{event_id}`).
 - **Admin web:**
-  - election setup, roster, link CSV, tally, finalize, alerts;
+  - election setup, roster, link CSV and email summary, tally, finalize, alerts;
   - an approval screen that **recomputes `target_hash` and the digest before signing** with the organization's key;
   - a review screen that recomputes `Hc(finding body)` against the ledger before signing;
   - signing keys: the approver loads their org's signer key into the admin web (file or paste, kept in browser memory only). Core never reads `ORG_*_SIGNER_KEY`; only the registry setup script and the scenario scripts do.
@@ -107,6 +108,37 @@ organization and never creates findings; it only relays signatures made in the s
 - `.env.example` lists ports, service keys, demo org keys, the pinned chain configuration and demo election settings used by scripts (no Core default, D-10). Secrets are never committed.
 - Demo configuration: 100 voters, 10-minute window, 60 s bucket and checkpoint interval.
 - Run the integration tests at M1, M2 and M3 (`docs/schedule.md`), and call the supervisor agent after each.
+
+### 4.4 Link emails
+- `tokens:issue` with `delivery: EMAIL` (D-16 note, contracts v1.2.1) sends one plain-text Korean email per newly issued
+  voter that has an address in the roster, over Gmail SMTP (STARTTLS, port 587, Python standard library only), after the
+  issuance is committed and outside the election lock. The CSV is returned as before; voters without an address or
+  whose email failed get their link from it. A lost-response retry returns the stored result and sends nothing again.
+- Nothing is sent unless `SMTP_USER` and `SMTP_PASSWORD` are set (`configured: false`, the web says to use the CSV).
+- Setup (the operator does this; the values go into `.env` only, never into the repository):
+  1. Create a dedicated Gmail account for the election (not a personal one).
+  2. Turn on 2-Step Verification for it, then create an App Password (Google Account → Security → App passwords).
+  3. In `.env`: `SMTP_USER=<the Gmail address>`, `SMTP_PASSWORD=<the 16-character App Password>`; optionally
+     `MAIL_FROM` (defaults to `SMTP_USER`). Restart Core.
+- Limits: a regular Gmail account sends about 500 emails a day; recipients can be any address (not only Gmail). Mail
+  from a new account may land in spam, so the email itself and the admin screen say to check the spam folder.
+- Bounded: one call sends for at most 45 s (the socket timeout is set before each message from the time left, at most
+  20 s; the DNS lookup of the SMTP host is not bounded) and reopens a lost connection at most twice; voters not reached
+  count as failed and `problem` says why (`CONNECT_FAILED`, `LOGIN_FAILED` = check the App Password, `TIME_LIMIT`,
+  `TOO_MANY_DISCONNECTS`). The response therefore beats nginx's 60 s `proxy_read_timeout`.
+- Gmail takes roughly 0.3–0.8 s per message, so from about 50 voters some may hit the 45 s limit (`TIME_LIMIT`); they
+  must get their link from the CSV, because there is no resend. The send time for 100 voters is to be measured at the
+  11-18 rehearsal with the dedicated account.
+- Privacy: addresses, names and links never appear in logs, alerts, events or error messages; the response reports
+  failures only as counts and `voter_key`s. A recipient that Gmail accepts but later bounces counts as sent.
+- The Gmail **Sent** folder keeps a copy of every link (a raw token each, like the CSV): protect the account (strong
+  password, 2-Step Verification, nobody else signs in) and delete the sent link emails after the election.
+- If Core dies or the response is lost while sending: the links are already issued. Pressing again (same
+  Idempotency-Key, within 15 minutes, while Core is still up) returns the same CSV and sends nothing again; `email` is
+  null if the first request is still sending (press again shortly). After a Core restart the stored result is gone
+  (409), and nobody can tell who already got an email: hand the links out from the CSV the admin received, or, if that
+  was lost too, TOKEN_REISSUE (not built yet).
+- Tests replace `smtplib.SMTP` with a fake (`core/tests/test_mailer.py`); no test sends real mail.
 
 ## 5. Optional features
 WINDOW_CHANGE, ELECTION_CLOSE_EARLY, TOKEN_REISSUE; AI report storage and review screen; service logs; outbox resume

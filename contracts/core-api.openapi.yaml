@@ -522,8 +522,14 @@ paths:
         Repeatable: the first call covers the whole roster; later calls cover only voters added by ROSTER_AMEND
         or whose unused token was revoked by TOKEN_REISSUE. Raw tokens exist only in this response (CSV) or in the
         sent emails; the server keeps token_hash only (D-16).
+        delivery = EMAIL (D-16 note, v1.2.1): the same CSV, and after the issuance is committed Core sends one plain-text
+        email per newly issued voter that has an email address (SMTP settings of the deployment; none set = nothing
+        sent, `configured` false). Sending is bounded (45 s per call, at most 2 reconnects); voters not reached in time
+        count as failed. A failed email never undoes the issuance: those voters get their link from the CSV.
+        Addresses, names and links never appear in logs, alerts, events or errors; failures are reported only here, as
+        counts and voter_keys.
         Lost response: retry with the same Idempotency-Key within 15 minutes returns the same CSV (kept encrypted in
-        memory only for that window, then wiped). For this endpoint the key is valid for 15 minutes only (not 24 h); a
+        memory only for that window, then wiped) and sends no email again. For this endpoint the key is valid for 15 minutes only (not 24 h); a
         later retry with the same key gets 409 CONFLICT and nothing is reissued. After that, use one bulk TOKEN_REISSUE for the affected voters.
       security: [{ bearer: [admin] }]
       parameters:
@@ -542,19 +548,24 @@ paths:
       responses:
         '401': { $ref: '#/components/responses/Problem' }
         '200':
-          description: CSV with columns external_ref,name,link (delivery = CSV); empty body if nobody needed a token
+          description: |
+            delivery = CSV: CSV with columns external_ref,name,link; empty body if nobody needed a token.
+            delivery = EMAIL: JSON with that CSV and the email summary.
           content:
             text/csv:
               schema: { type: string }
-        '202':
-          description: Emails queued (delivery = EMAIL)
-          content:
             application/json:
               schema:
                 type: object
-                required: [queued]
+                additionalProperties: false
+                required: [csv, email]
                 properties:
-                  queued: { type: integer, minimum: 0 }
+                  csv: { type: string, description: the text/csv body of delivery = CSV (empty if nobody needed a token) }
+                  email:
+                    description: null only on a lost-response retry while the first request is still sending
+                    oneOf:
+                      - { $ref: '#/components/schemas/LinkEmailSummary' }
+                      - { type: 'null' }
         '409':
           description: INVALID_STATE_TRANSITION
           content:
@@ -1722,6 +1733,25 @@ components:
       properties:
         voter_count: { type: integer, minimum: 1 }
         roster_hash: { $ref: './common.schema.json#/$defs/Sha256Hex' }
+
+    LinkEmailSummary:
+      type: object
+      additionalProperties: false
+      required: [configured, sent, failed, no_address, failed_voter_keys, problem]
+      description: Link emails of one tokens:issue call (delivery = EMAIL). Counts cover only the voters issued in that call.
+      properties:
+        configured: { type: boolean, description: false = the deployment has no SMTP account; nothing was sent }
+        sent: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0, description: issued voters with an address whose email could not be sent (0 when configured is false) }
+        no_address: { type: integer, minimum: 0, description: issued voters without an email address in the roster }
+        failed_voter_keys: { type: array, items: { type: string }, description: voter_key of each failed voter (staff only, like roster:read) }
+        problem:
+          enum: [null, CONNECT_FAILED, LOGIN_FAILED, TIME_LIMIT, TOO_MANY_DISCONNECTS]
+          description: |
+            Why the batch stopped early (never the server's text); every voter not sent by then is in failed.
+            null = no early stop (failed then counts only refused recipients or messages). TIME_LIMIT = the batch has a
+            45 s budget so the response beats the 60 s proxy timeout. TOO_MANY_DISCONNECTS = the connection was lost a
+            third time (at most 2 reconnects per batch).
 
     BallotReceipt:
       type: object

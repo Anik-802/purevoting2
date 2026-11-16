@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     creation_check_mode: str = "node"
     # base of the one-time links: <voter_web_url>/vote/<election_id>#t=<token>
     voter_web_url: str = "http://127.0.0.1:3000"
+    # link emails after tokens:issue with delivery EMAIL (D-16 note): STARTTLS on smtp_port, sent only when smtp_user and
+    # smtp_password are both set (Gmail: an App Password of a dedicated account); mail_from defaults to smtp_user
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    mail_from: str = ""
     # decisions v1.5 close once every voter has voted; off unless chosen (docker-compose.yml turns it on for the fake
     # Gateway; the integration stack needs a contract deployed from this version, then ALL_VOTED_CLOSE=true)
     all_voted_close: bool = False

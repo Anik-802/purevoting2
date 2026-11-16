@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Header
 from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import text
 
-from app import elections, findings, schemas, tally, timeutil
+from app import elections, findings, mailer, schemas, tally, timeutil
 from app.auth import Staff, require_staff
 from app.errors import Problem
 from app.models import ElectionCreate, IssueIn, RosterIn
@@ -92,8 +92,6 @@ def close(election_id: str, staff: Staff = Depends(ADMIN)):
 @router.post("/v1/elections/{election_id}/tokens:issue")
 def issue_tokens(election_id: str, body: IssueIn, staff: Staff = Depends(ADMIN),
                  idempotency_key: str | None = Header(default=None, min_length=8, max_length=64)):
-    if body.delivery == "EMAIL":
-        raise Problem(422, "VALIDATION_ERROR", "EMAIL delivery is not available in the MVP; use CSV (D-16)")
     bh = elections.body_hash(body.model_dump())
 
     def go(conn, e, now):
@@ -104,13 +102,22 @@ def issue_tokens(election_id: str, body: IssueIn, staff: Staff = Depends(ADMIN),
                 cached = elections.issue_cache.get(election_id, idempotency_key)
                 if cached is None:
                     raise Problem(409, "CONFLICT", "Idempotency-Key expired; use TOKEN_REISSUE")
-                return cached
+                return cached, e, None
         rows, _ = elections.issue_tokens(conn, e, now)
         csv_text = elections.to_csv(rows)
         if idempotency_key:
             elections.issue_cache.put(election_id, idempotency_key, csv_text)
-        return csv_text
-    return PlainTextResponse(run_election(election_id, go), media_type="text/csv")
+        return csv_text, e, rows
+    csv_text, e, rows = run_election(election_id, go)
+    if body.delivery == "CSV":
+        return PlainTextResponse(csv_text, media_type="text/csv")
+    if rows is None:     # lost-response retry: the first request's summary, never a second send
+        return {"csv": csv_text, "email": elections.issue_cache.email(election_id, idempotency_key)}
+    # committed and unlocked: the tokens stay issued whatever happens to the emails (D-16 note)
+    summary = mailer.send_links(e, rows)
+    if idempotency_key:
+        elections.issue_cache.put_email(election_id, idempotency_key, summary)
+    return {"csv": csv_text, "email": summary}
 
 
 @router.post("/v1/elections/{election_id}/tally")

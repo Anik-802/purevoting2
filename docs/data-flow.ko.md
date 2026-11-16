@@ -36,7 +36,7 @@
 ## 3. 표 하나의 여정
 
 ```
-① 링크 받기      관리자 → CSV → 투표자          https://<주소>/vote/<선거ID>#t=<토큰>   (메일 발송은 개발용 MailHog, D-16)
+① 링크 받기      관리자 → CSV → 투표자          https://<주소>/vote/<선거ID>#t=<토큰>   (이메일이 있으면 Gmail로 자동 발송, 없으면 CSV, D-16)
 ② 투표권 만들기  브라우저: credential = 128bit 난수 (서버는 원문을 모름)
 ③ 링크 사용      브라우저 → Core: redeem(token, H(credential))
                  Core: 토큰 USED 처리 + 투표권 해시 등록 (한 트랜잭션, 서로 다른 스키마)          ← Core 구현됨

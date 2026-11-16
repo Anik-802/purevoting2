@@ -23,7 +23,10 @@ npm run build                      # type check + bundle; builds default to the 
 - Tally and finalize call Core (`runTally`, `finalizeElection`); finalize is permissive, so the election shows
   FINALIZED only after the Gateway accepts ELECTION_FINALIZED.
 - Not in Core yet (shown as notices in real mode): manual open / close (Core follows the window); approval / review
-  screens and their signature digests (part B, 11-14 – 11-17); mail delivery.
+  screens and their signature digests (part B, 11-14 – 11-17).
+- Link issuing asks Core for `delivery: EMAIL`: Core emails each voter with an address (when its Gmail account is set,
+  `docs/roles/core-web.md` 4.4) and the screen shows the summary (sent / failed / no address); the CSV is still
+  downloaded for everyone else. The mock has no mail account and always reports "not configured".
 - Candidate pledges (description) exist only in the mock: `core-api` Candidate has no such field.
 - The CSP allows `'wasm-unsafe-eval'` for libsodium's WebAssembly only; string eval stays blocked.
 - Voting needs a secure context (`crypto.subtle`, `crypto.randomUUID`): `https://` (Funnel / Serve) or

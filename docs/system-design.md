@@ -71,7 +71,7 @@
 | Database | PostgreSQL (one database, two schemas) | D-06 | free |
 | Where it runs | Each developer's PC with `docker compose up`; the demo runs on one PC (no cloud) | section 7 #6, section 10 | free |
 | Blockchain | Private PureChain network (go-ethereum fork, EVM; chosen by Harits, v1.1) | D-02 | free |
-| Mail | MailHog (fake mailbox) in development, CSV export in the demo | D-16 | free |
+| Mail | Links emailed over Gmail SMTP (dedicated account, App Password) plus the CSV export for everyone without email (D-16 note) | D-16 | free (~500 emails/day) |
 | Repository / CI | GitHub monorepo + GitHub Actions | D-18 | free |
 | Mock servers | prism (from the OpenAPI files) | section 7 #4 | free |
 | AI model | Free open-weight model run locally, chosen by Anik; no paid API; fallback a template report without AI; the agent is optional | D-15 (v1.2) | zero cost only |

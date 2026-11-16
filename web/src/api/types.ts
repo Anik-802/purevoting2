@@ -77,6 +77,24 @@ export interface RosterSummary {
   roster_hash: string;
 }
 
+/** core-api LinkEmailSummary: link emails of one tokens:issue call (counts and voter_keys only, never addresses) */
+export interface LinkEmailSummary {
+  configured: boolean;
+  sent: number;
+  failed: number;
+  no_address: number;
+  failed_voter_keys: string[];
+  /** why sending stopped early (the rest count as failed); null = no early stop */
+  problem: null | "CONNECT_FAILED" | "LOGIN_FAILED" | "TIME_LIMIT" | "TOO_MANY_DISCONNECTS";
+}
+
+/** tokens:issue with delivery EMAIL: the CSV (external_ref,name,link; empty when nobody needed a link) and the email
+ * summary (null on a lost-response retry while the first request is still sending) */
+export interface IssueResult {
+  csv: string;
+  email: LinkEmailSummary | null;
+}
+
 export interface RosterVoter {
   voter_key: string;
   status: "ACTIVE" | "REMOVED";

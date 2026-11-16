@@ -50,7 +50,7 @@
 | D-13 | Rule Engine data access | Core read-only views (as of a checkpoint) + Gateway query API + direct node reads; no DB access | Anik, Seungmin | Confirmed |
 | D-14 | Rule / checkpoint cadence | Checkpoint interval = integer multiple of the bucket (default 1×) + on state changes; rules at every checkpoint + after closing + manual | Anik, Seungmin | Confirmed |
 | D-15 | AI model and calling | **No paid AI (v1.2):** a free open-weight model run locally (runtime and model chosen by Anik), single agent; part of the M2 demo; if it fails the 11-13 check, a non-AI template report instead; anything that costs money is dropped | Anik | Confirmed (v1.2) |
-| D-16 | Link delivery | Development: MailHog (fake mailbox); demo: CSV export | Seungmin | Confirmed |
+| D-16 | Link delivery | CSV export, plus emails over Gmail SMTP when an account is set (note 2026-11-12) | Seungmin | Confirmed |
 | D-17 | Authentication | Staff: ID/password + JWT (admin / approver / auditor + org); **a different key per service** and a permission matrix | Seungmin | Confirmed |
 | D-18 | Repository and runtime | GitHub monorepo + docker compose + GitHub Actions | Seungmin | Confirmed |
 | D-19 | Document language | Contracts and design documents in English (reference); `system-design.ko.md` is a translation, `decisions.ko.md` the Korean original | Seungmin | Confirmed |
@@ -265,10 +265,16 @@
   `.env.example`
 
 ### D-16. Link delivery
-- Development: MailHog; demo: a CSV downloadable once right after issuing.
+- A CSV downloadable once right after issuing; since 2026-11-12 also emailed over Gmail SMTP when an account is set
+  (note below; MailHog is no longer used).
 - **Disclosed limit:** an admin holding the CSV can vote on behalf of voters (threat model).
 - **Confirmed note (v1.0):** if the CSV response is lost, a retry with the same Idempotency-Key within 15 minutes returns
   the same CSV. Later loss → TOKEN_REISSUE (optional); without it the affected voters abstain.
+- **Note (2026-11-12, contracts v1.2.1):** links are also emailed. `tokens:issue` with `delivery: EMAIL` (used by the
+  admin web) returns the same CSV and, after the commit, sends one email per issued voter with an address over Gmail
+  SMTP (a dedicated account with an App Password, in `.env`); unset → nothing is sent. The CSV stays the fallback for
+  voters without an address or whose email failed; the response reports failures as counts and voter_keys only.
+  Setup: `docs/roles/core-web.md` 4.4. Same disclosed limit: the operator's mail account also holds every emailed link.
 
 ### D-17. Authentication
 - **Decision:** staff use JWT (admin / approver + org); invited auditors have the read-only `auditor` role (no names, no

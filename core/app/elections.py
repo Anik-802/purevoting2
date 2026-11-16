@@ -261,12 +261,13 @@ def close_all_voted(conn, e: dict, now: int) -> None:
 
 
 def issue_tokens(conn, e: dict, now: int) -> tuple[list[dict], int]:
-    """Issue one token per ACTIVE voter without a non-revoked token. Returns (CSV rows, batch_no or 0)."""
+    """Issue one token per ACTIVE voter without a non-revoked token. Returns (rows, batch_no or 0); a row also carries
+    voter_key and email for the link emails, which to_csv leaves out."""
     if e["status"] not in ("ROSTER_FROZEN", "OPEN") or e["creation_check"] != "PASSED":
         raise Refused(409, "INVALID_STATE_TRANSITION")
     eid = e["election_id"]
     voters = conn.execute(text(
-        "SELECT r.voter_key, r.external_ref, r.name FROM credential.roster r WHERE r.election_id = :e "
+        "SELECT r.voter_key, r.external_ref, r.name, r.email FROM credential.roster r WHERE r.election_id = :e "
         "AND r.removed_checkpoint IS NULL AND NOT EXISTS (SELECT 1 FROM credential.token_status t "
         "WHERE t.election_id = r.election_id AND t.voter_key = r.voter_key AND t.revoked_checkpoint IS NULL) "
         "ORDER BY r.external_ref"), {"e": eid}).all()
@@ -277,7 +278,8 @@ def issue_tokens(conn, e: dict, now: int) -> tuple[list[dict], int]:
                           "VALUES (:e, :h, :k, :c)"),
                      {"e": eid, "h": hashing.H(token), "k": v.voter_key, "c": e["open_checkpoint"]})
         rows.append({"external_ref": v.external_ref, "name": v.name,
-                     "link": f"{settings.voter_web_url}/vote/{eid}#t={token}"})
+                     "link": f"{settings.voter_web_url}/vote/{eid}#t={token}", "voter_key": v.voter_key,
+                     "email": v.email})
     if not rows:
         return [], 0
     live = [r[0] for r in conn.execute(text("SELECT token_hash FROM credential.token_status WHERE election_id = :e "
@@ -295,29 +297,35 @@ def _cell(value: str) -> str:
     return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
 
 
+CSV_FIELDS = ["external_ref", "name", "link"]
+
+
 def to_csv(rows: list[dict]) -> str:
     if not rows:
         return ""
     buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=["external_ref", "name", "link"], lineterminator="\n")
+    w = csv.DictWriter(buf, fieldnames=CSV_FIELDS, lineterminator="\n")
     w.writeheader()
-    w.writerows({k: _cell(v) for k, v in r.items()} for r in rows)
+    w.writerows({k: _cell(r[k]) for k in CSV_FIELDS} for r in rows)
     return buf.getvalue()
 
 
 class IssueCache:
     """Lost-response retry for tokens:issue: the CSV is kept encrypted in memory for 15 minutes, then wiped (core-api).
-    The key itself is recorded in credential.idempotency, so a retry after the wipe (or a restart) gets 409."""
+    The key itself is recorded in credential.idempotency, so a retry after the wipe (or a restart) gets 409. The link
+    email summary (counts and voter_keys only) is kept next to it once sent, so a retry never sends again."""
     TTL = 15 * 60
 
     def __init__(self):
         self._key = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
         self._items: dict[tuple[str, str], tuple[float, bytes]] = {}
+        self._email: dict[tuple[str, str], dict] = {}
 
     def _purge(self):
         now = time.monotonic()
         for k in [k for k, v in self._items.items() if now - v[0] > self.TTL]:
             del self._items[k]
+            self._email.pop(k, None)
 
     def get(self, eid: str, key: str) -> str | None:
         self._purge()
@@ -327,6 +335,14 @@ class IssueCache:
     def put(self, eid: str, key: str, csv_text: str) -> None:
         self._items.setdefault((eid, key), (time.monotonic(),
                                             nacl.secret.SecretBox(self._key).encrypt(csv_text.encode("utf-8"))))
+
+    def email(self, eid: str, key: str) -> dict | None:
+        """The email summary of the first request; None while it is still sending."""
+        return self._email.get((eid, key))
+
+    def put_email(self, eid: str, key: str, summary: dict) -> None:
+        if (eid, key) in self._items:
+            self._email.setdefault((eid, key), summary)
 
 
 issue_cache = IssueCache()

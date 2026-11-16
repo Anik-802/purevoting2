@@ -1210,3 +1210,82 @@ def test_elgamal_tally_with_organization_shares(env, tmp_path):
     from app import schemas
     for row in outbox_rows(eid):
         assert schemas.errors("ledger-events.schema.json", "LedgerEventSubmission", row["event"]) == [], row["event"]
+
+
+def test_link_emails_after_issue(env, monkeypatch):
+    """delivery EMAIL: the same CSV plus one email per voter with an address, sent after the commit; a failed
+    recipient leaves its token issued; a lost-response retry sends nothing again (email null while the first request
+    is still sending); CSV and an unset account send nothing (fake SMTP, no network)."""
+    from tests.test_mailer import FakeSMTP, reset_fake, summary
+    from app import mailer
+    c, auth, t0 = env["client"], env["auth"], env["t0"]
+    reset_fake()
+    FakeSMTP.refuse = {"s001@example.org": 550}
+    monkeypatch.setattr(mailer.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(settings, "smtp_user", "pv.test@gmail.com")
+    monkeypatch.setattr(settings, "smtp_password", "app-password")
+
+    voters = [{"external_ref": f"s{i:03d}", "name": f"Voter {i}"} | ({"email": f"s{i:03d}@example.org"} if i != 2 else {})
+              for i in range(4)]
+
+    def frozen(title):
+        e2 = _created(c, auth, t0, title)
+        c.put(f"/v1/elections/{e2}/roster", headers=auth, json={"voters": voters})
+        assert c.post(f"/v1/elections/{e2}/roster:freeze", headers=auth).status_code == 202
+        return e2
+    eid = frozen("Mail")
+    keys = {v["external_ref"]: v["voter_key"]
+            for v in c.post(f"/v1/elections/{eid}/roster:read", headers=auth).json()["voters"]}
+
+    ikey = {**auth, "Idempotency-Key": "issue-" + secrets.token_hex(4)}
+    r = c.post(f"/v1/elections/{eid}/tokens:issue", headers=ikey, json={"delivery": "EMAIL"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+    out = r.json()
+    assert out["email"] == summary(sent=2, failed=[keys["s001"]], no_address=1)
+    lines = out["csv"].strip().splitlines()
+    assert lines[0] == "external_ref,name,link" and len(lines) == 5          # the CSV still has everyone
+    mails = [m for conn in FakeSMTP.instances for m in conn.sent]
+    assert [m["To"] for m in mails] == ["s000@example.org", "s003@example.org"]
+    assert lines[1].split(",")[2] in mails[0].get_content()                 # the voter's own link
+    with db.get_engine().connect() as conn:                                 # the failed voter's token stays issued
+        assert conn.execute(text("SELECT count(*) FROM credential.token_status WHERE election_id = :e"),
+                            {"e": eid}).scalar_one() == 4
+    # nothing about the addresses reaches events or alerts
+    assert "example.org" not in json.dumps([row["event"] for row in outbox_rows(eid)])
+    assert c.get(f"/v1/elections/{eid}/audit-alerts", headers=auth).json()["items"] == []
+
+    again = c.post(f"/v1/elections/{eid}/tokens:issue", headers=ikey, json={"delivery": "EMAIL"})
+    assert again.json() == out                                              # lost-response retry: same result ...
+    assert len([m for conn in FakeSMTP.instances for m in conn.sent]) == 2   # ... and no second email
+    assert c.post(f"/v1/elections/{eid}/tokens:issue", headers=ikey, json={"delivery": "CSV"}).status_code == 409
+
+    # nobody left to issue: empty CSV, zero counts, no connection
+    n = len(FakeSMTP.instances)
+    empty = c.post(f"/v1/elections/{eid}/tokens:issue", headers=auth, json={"delivery": "EMAIL"}).json()
+    assert empty == {"csv": "", "email": summary()}
+    assert len(FakeSMTP.instances) == n
+
+    # a retry that arrives while the first request is still sending: same CSV, email null, nothing sent twice
+    eid4, during = frozen("Mail 4"), []
+    ikey4 = {**auth, "Idempotency-Key": "issue-" + secrets.token_hex(4)}
+    send_links = mailer.send_links
+
+    def retry_first(e, rows):
+        during.append(c.post(f"/v1/elections/{eid4}/tokens:issue", headers=ikey4, json={"delivery": "EMAIL"}).json())
+        return send_links(e, rows)
+    monkeypatch.setattr(mailer, "send_links", retry_first)
+    first = c.post(f"/v1/elections/{eid4}/tokens:issue", headers=ikey4, json={"delivery": "EMAIL"}).json()
+    monkeypatch.setattr(mailer, "send_links", send_links)
+    assert during == [{"csv": first["csv"], "email": None}] and first["email"]["sent"] == 2
+    later = c.post(f"/v1/elections/{eid4}/tokens:issue", headers=ikey4, json={"delivery": "EMAIL"}).json()
+    assert later == first and len([m for conn in FakeSMTP.instances for m in conn.sent]) == 4
+    n = len(FakeSMTP.instances)
+
+    # delivery CSV never sends; an unset account answers configured false and sends nothing
+    r = c.post(f"/v1/elections/{frozen('Mail 2')}/tokens:issue", headers=auth, json={"delivery": "CSV"})
+    assert r.headers["content-type"].startswith("text/csv") and len(r.text.strip().splitlines()) == 5
+    assert len(FakeSMTP.instances) == n
+    monkeypatch.setattr(settings, "smtp_password", "")
+    out3 = c.post(f"/v1/elections/{frozen('Mail 3')}/tokens:issue", headers=auth, json={"delivery": "EMAIL"}).json()
+    assert out3["email"] == summary(no_address=1, configured=False)
+    assert len(out3["csv"].strip().splitlines()) == 5 and len(FakeSMTP.instances) == n

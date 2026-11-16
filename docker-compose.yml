@@ -45,6 +45,12 @@ services:
       # SEALED_BOX_V1 is the D-08 sealed box with the commission's key. An existing database needs
       # core/db/migrations/001_elgamal.sql once.
       BALLOT_SCHEME: ${BALLOT_SCHEME:-ELGAMAL_ED25519_V1}
+      # link emails (D-16 note): nothing is sent unless SMTP_USER and SMTP_PASSWORD are set (core-web.md "Link emails")
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
     depends_on:
       db:
         condition: service_healthy

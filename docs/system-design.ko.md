@@ -69,7 +69,7 @@
 | DB | PostgreSQL (DB 1개, 스키마 2개) | D-06 | 무료 |
 | 실행 위치 | 각자 PC에서 `docker compose up`, 시연도 PC 한 대(클라우드 안 씀) | 7장 #6, 10장 | 무료 |
 | 블록체인 | PureChain 사설 네트워크(go-ethereum 계열, EVM. Harits 결정, v1.1) | D-02 | 무료 |
-| 메일 | 개발은 MailHog(가짜 메일함), 시연은 CSV | D-16 | 무료 |
+| 메일 | Gmail SMTP로 링크 메일 발송(전용 계정·앱 비밀번호), 이메일이 없거나 실패한 사람은 CSV (D-16 보완) | D-16 | 무료(하루 약 500통) |
 | 저장소·CI | GitHub 모노레포 + GitHub Actions | D-18 | 무료 |
 | mock 서버 | prism(OpenAPI 파일로 생성) | 7장 #4 | 무료 |
 | AI 모델 | 로컬에서 돌리는 무료 공개 모델, Anik이 선택. 유료 API 금지, 안 되면 AI 없는 템플릿 보고서. 에이전트는 선택 기능 | D-15(v1.2) | 비용 0만 허용 |
