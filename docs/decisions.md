@@ -90,7 +90,9 @@
   - **Timing:** (1 + D) · P ≤ time_bucket_seconds / 4. With the 60 s demo bucket and D = 2: P ≤ 5 s (whole seconds).
     Recomputed when D is final.
   - chain-interface.md is normative for EVM platforms (A or C). `GET /v1/chain` reports `platform: other`.
-  - *Pending measurement (Harits, due 2026-11-09):* mode name and measured P.
+  - **Measured (Harits, 2026-11-08, `ledger/measurements/`):** Clique PoA with configured period P = 1 s, chainId
+    424242. Over 90 blocks the chain timestamp gap was 1 s on average and at most 1 s, and every block was sealed by its
+    in-turn validator. (1 + D) · P = 3 s with D = 2, within the 15 s limit (bucket 60 s / 4). One run on one machine.
 
 ### D-03. Nodes and operators
 - **Background:** BFT-type consensus (e.g. QBFT) stalls with 3 nodes if one fails (3f+1).
@@ -106,7 +108,14 @@
     run by orgs other than the Gateway operator; two URLs keep reads working when one node is stopped in a fault test).
   - Fault tolerance is measured, not assumed: stop one validator (do blocks continue?) and two (do they stop?). If one
     stopped validator halts the chain, the report states it as a demo limit.
-  - *Pending measurement (Harits, due 2026-11-09):* the two stop tests.
+  - **Measured (Harits, 2026-11-08, two runs, validators stopped with SIGTERM):**
+    - One validator stopped: the chain continued (60 blocks in 60 s, longest wall-clock stall 1.9 s).
+    - Two validators stopped: the chain halted (no block for the last 44.9 s of a 45 s window). One more stopped
+      validator than the network tolerates therefore stops the election; this is a demo limit.
+    - A stopped validator that restarted was back in the chain 1.4 s after the start command; one that had been down
+      about 2 minutes (about 100 blocks) caught up 13.4 s after the start command. Peering is manual because the
+      nodes run with `--nodiscover`, so the compose network needs static peers or a bootnode.
+    - Not measured: a crash (SIGKILL) or a network cut instead of a graceful stop.
 - **Affects:** `GET /v1/nodes`, demo scenario, `docs/threat-model.md`
 
 ### D-04. Ledger recording unit
@@ -361,6 +370,11 @@
     match in confirmed state (chain-interface.md "Confirmations").
   - Core's creation check and the Rule Engine count a chain item only when the pinned node's latest block ≥ its block + D.
   - Core retries RETRY_LATER every 1 s for the first 30 s, then with exponential backoff up to 60 s.
+  - **Measured (Harits, 2026-11-08):** the deepest reorg observed was 0 (3 nodes polled about once per second, the last
+    8 blocks re-checked, whole run, including the one-down and two-down phases). D = max(2, 0 + 1) = 2, so **D = 2 is
+    kept**. A confirmation takes about 2 s after inclusion. The observation is not a bound on reorg depth. A stall of
+    about 1.9 s plus the 2 s confirmation can exceed the Gateway's 3.5 s wait; the answer is then RETRY_LATER and
+    Core's retry gets DUPLICATE (ledger/DECISIONS.md G2, G16).
   - **Choosing D:** finality is a protocol property and cannot be proven by measurement. D = max(2, deepest reorg Harits
     observes in validator stop/restart tests + 1).
 - **Disclosed limit:** D only protects against accidental forks. Two of three validators (in the demo, one person) can
