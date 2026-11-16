@@ -16,6 +16,8 @@ ledger/**/chaindata/
 
 # T01 run records (tests/scenarios/T01/setup.py --out)
 t01-runs/
+t05-*-runs/
+t08?-runs/
 # D-30 organization keys made by tools/trustees.sh (the secret files never leave their organization)
 trustee-keys/
 web/dist/

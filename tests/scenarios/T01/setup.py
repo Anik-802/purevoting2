@@ -144,7 +144,10 @@ def judge(label: dict, decided: dict, items: list[dict], k: int) -> list[str]:
     return out
 
 
-def run(a, rec: dict) -> None:
+def run(a, rec: dict, hooks: dict | None = None) -> None:
+    """The T01 flow. `hooks` (tests/scenarios/tamper.py, T05 and T08) may add "after_freeze"(ctx) and
+    "after_commit"(ctx, k) -> judged checkpoint; ctx holds the client, auth, election and run record."""
+    hooks = hooks or {}
     c = httpx.Client(base_url=a.core, timeout=15)
     B, window, voters, votes = a.bucket, a.bucket * a.buckets, a.voters, a.votes
     rng = random.Random(a.seed)
@@ -162,19 +165,23 @@ def run(a, rec: dict) -> None:
     start = (int(time.time()) + a.lead) // B * B + B
     end = start + window
     e = expect(c.post("/v1/elections", headers=auth, json={
-        "title": f"T01 seed {a.seed}", "window_start": iso(start), "window_end": iso(end),
+        "title": f"{rec['scenario']} seed {a.seed}", "window_start": iso(start), "window_end": iso(end),
         "time_bucket_seconds": B, "checkpoint_interval_seconds": B,
         "candidates": [{"name": "A"}, {"name": "B"}], "org_ids": ORGS, "approval_threshold": 2}), 201).json()
     eid = rec["election_id"] = e["election_id"]
     log(f"election {eid}: window {iso(start)} - {iso(end)}")
     expect(c.put(f"/v1/elections/{eid}/roster", headers=auth,
-                 json={"voters": [{"external_ref": f"T01-{i:03d}", "name": f"voter {i}"} for i in range(voters)]}), 200)
+                 json={"voters": [{"external_ref": f"{rec['scenario']}-{i:03d}", "name": f"voter {i}"} for i in range(voters)]}), 200)
 
     t = time.time()
     poll(lambda: staff_election()["creation_check"] == "PASSED", a.timeout, "creation check PASSED")
     rec["timings"]["creation_check_s"] = round(time.time() - t, 1)
     log(f"creation check PASSED after {rec['timings']['creation_check_s']} s")
     expect(c.post(f"/v1/elections/{eid}/roster:freeze", headers=auth), 202)
+    ctx = {"client": c, "auth": auth, "election_id": eid, "rec": rec, "voters": voters, "window_end": end,
+           "staff_election": staff_election}
+    if "after_freeze" in hooks:
+        hooks["after_freeze"](ctx)
     r = expect(c.post(f"/v1/elections/{eid}/tokens:issue", json={"delivery": "CSV"},
                       headers={**auth, "Idempotency-Key": "t01-" + secrets.token_hex(6)}), 200)
     tokens = [ln.rsplit("#t=", 1)[1] for ln in r.text.strip().splitlines()[1:]]
@@ -226,6 +233,12 @@ def run(a, rec: dict) -> None:
     log(f"every receipt ANCHORED ({rec['timings']['anchored_s']} s)")
 
     poll(lambda: staff_election()["counters"]["as_of_checkpoint"] >= k, B + a.timeout, f"checkpoint {k} committed")
+    if "after_commit" in hooks:   # the fault is injected now; the checkpoint that commits it is judged
+        k = rec["judged_checkpoint"] = hooks["after_commit"](ctx, k)
+        if time.time() >= end:
+            raise Stop("the window ended before the judged checkpoint; use a longer window")
+        poll(lambda: staff_election()["counters"]["as_of_checkpoint"] >= k, B + a.timeout,
+             f"checkpoint {k} committed")
     log(f"checkpoint {k} committed; waiting for R1-R5 findings at it")
     t = time.time()
     state = {}
@@ -258,12 +271,13 @@ def run(a, rec: dict) -> None:
         log(f"alert {x['kind']} ({x['source']}, checkpoint {x['checkpoint']}): {(x.get('detail') or '')[:120]}")
 
 
-def main(argv=None) -> int:
+def main(argv=None, scenario: str = "T01", folder: Path = HERE, hooks: dict | None = None) -> int:
+    """T01, or a variant that reuses the flow (`scenario` names the run, `folder` holds its expected.json)."""
     try:   # a summary or alert detail with characters the console cannot show must not stop the run record
         sys.stdout.reconfigure(errors="backslashreplace")
     except (AttributeError, ValueError):
         pass
-    p = argparse.ArgumentParser(description="T01 normal vote against the running stack")
+    p = argparse.ArgumentParser(description=f"{scenario} against the running stack (T01 flow)")
     p.add_argument("--core", default=os.environ.get("CORE_URL", "http://127.0.0.1:8000"))
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--config", choices=sorted(PRESETS), default="demo",
@@ -275,7 +289,7 @@ def main(argv=None) -> int:
     p.add_argument("--lead", type=int, default=180, help="seconds before window_start for creation check and setup")
     p.add_argument("--timeout", type=int, default=300, help="per ledger step (s)")
     p.add_argument("--findings-timeout", type=int, default=900)
-    p.add_argument("--out", type=Path, default=Path("t01-runs"))
+    p.add_argument("--out", type=Path, default=Path(f"{scenario.lower()}-runs"))
     a = p.parse_args(argv)
     config = a.config
     for name, value in PRESETS[a.config].items():
@@ -287,14 +301,14 @@ def main(argv=None) -> int:
         p.error("need voters x bucket >= 10 x window (D-10) and 0 < votes <= voters")
 
     started = time.time()
-    rec = {"scenario": "T01", "commit": commit(), "seed": a.seed, "config": config,
+    rec = {"scenario": scenario, "commit": commit(), "seed": a.seed, "config": config,
            "parameters": {n: getattr(a, n) for n in ("bucket", "buckets", "voters", "votes", "lead")},
            "started_at": iso(started), "timings": {}, "checks": {}, "problems": []}
-    label_path = HERE / "expected.json"
+    label_path = folder / "expected.json"
     label = json.loads(label_path.read_text(encoding="utf-8")) if label_path.exists() else None
     code = 2
     try:
-        run(a, rec)
+        run(a, rec, hooks)
         if label is not None:
             items = [f for f in rec["findings"] if f["rule_id"] in RULES]
             decided = {r: (d["result"], next(f for f in items if f["finding_id"] == d["finding_id"]))
@@ -305,7 +319,7 @@ def main(argv=None) -> int:
         elif rec["problems"]:
             rec["verdict"], code = "FAIL", 1
         elif rec["partial"]:
-            rec["verdict"] = f"T01 (partial {'/'.join(rec['partial'])})"   # not a T01 pass (rules-ai.md section 8)
+            rec["verdict"] = f"{scenario} (partial {'/'.join(rec['partial'])})"   # not a T01 pass (rules-ai.md section 8)
         else:
             rec["verdict"], code = "PASS", 0
     except Failed as exc:
@@ -317,9 +331,9 @@ def main(argv=None) -> int:
     rec["finished_at"] = iso(time.time())
 
     a.out.mkdir(parents=True, exist_ok=True)
-    path = a.out / f"T01-seed{a.seed}-{datetime.fromtimestamp(started).strftime('%Y%m%d-%H%M%S')}.json"
+    path = a.out / f"{scenario}-seed{a.seed}-{datetime.fromtimestamp(started).strftime('%Y%m%d-%H%M%S')}.json"
     path.write_text(json.dumps(rec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    log(("" if rec["verdict"].startswith("T01") else "T01 ") + rec["verdict"] + "".join(f"\n  - {x}" for x in rec["problems"]))
+    log(("" if rec["verdict"].startswith(scenario) else scenario + " ") + rec["verdict"] + "".join(f"\n  - {x}" for x in rec["problems"]))
     log(f"run record: {path}")
     return code
 
