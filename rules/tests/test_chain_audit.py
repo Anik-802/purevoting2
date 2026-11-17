@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from purevoting_rules.chain_audit import audit_chain
+from purevoting_rules.chain_audit import audit_chain, gateway_anchor_omissions
 from purevoting_rules.hashing import H, Hc, leaf_hash, rejections_root
 
 
@@ -182,15 +182,22 @@ def test_rejections_are_rehashed_against_node_root_and_membership():
     assert audit(s)[0] is True
 
 
-def test_omitted_confirmed_anchor_requires_node_log_and_fixed_read_boundary():
+def test_omitted_confirmed_anchor_requires_waited_reread_node_log_and_fixed_boundary():
     s = clean_snapshot()
     key = H("anc_" + "9" * 26)
     s["chain"]["anchors"][key] = deepcopy(next(iter(s["chain"]["anchors"].values())))
     # Merely having anchorAt without the confirmed log does not prove omission.
     assert audit(s)[:2] == (False, "BATCH_NOT_ANCHORED")
     s["chain"]["anchor_logs"][key] = dict(next(iter(s["chain"]["anchor_logs"].values())), block_number=1)
-    failed, _, out, _ = audit(s)
-    assert failed and out["chain_anchor_ids_missing_from_gateway"] == [key]
+    failed, reason, out, _ = audit(s)
+    assert not failed and reason == "BATCH_NOT_ANCHORED"
+    assert out["anchors_mismatch"] == 0
+    assert out["chain_anchor_ids_missing_from_gateway"] == [key]
+    assert gateway_anchor_omissions(s["chain"], s["anchor_evidence"]) == [key]
+    # Only the worker can establish this evidence after a persisted bounded wait
+    # and a fresh complete /v1/anchors response still omitting the same anchor.
+    s["confirmed_gateway_anchor_omissions"] = [key]
+    assert audit(s)[0] is True
     # Voter batches can be confirmed AFTER the checkpoint. The fixed node read
     # happens before the Gateway index read, so they cannot be silently ignored.
     s["chain"]["anchor_logs"][key]["block_number"] = 4
@@ -198,6 +205,84 @@ def test_omitted_confirmed_anchor_requires_node_log_and_fixed_read_boundary():
     # A log beyond the fixed confirmed read cannot establish an omission.
     s["chain"]["anchor_logs"][key]["block_number"] = 6
     assert audit(s)[0] is False
+
+
+@pytest.mark.parametrize("body_pending", [True, False])
+def test_snapshot_pending_before_anchor_collection_is_unavailable_and_recovers(body_pending):
+    s = clean_snapshot()
+    complete = deepcopy(s)
+    event = s["events"][0]
+    # The body in the selected snapshot can be older than the later anchor
+    # listing. It can also remain the same cached PENDING object in that listing.
+    s["events"][0] = dict(event, anchor={"status": "PENDING"})
+    if body_pending:
+        s["anchor_evidence"]["events"][event["event_id"]] = deepcopy(s["events"][0])
+    failed, reason, out, _ = audit(s)
+    assert not failed and reason == "BATCH_NOT_ANCHORED"
+    assert out["anchors_mismatch"] == 0 and out["events_hash_mismatch"] == 0
+    assert out["events_unanchored"] == 1
+    # A subsequent honest snapshot is clean; no irreversible FAIL was needed.
+    assert audit(complete)[:2] == (False, None)
+
+
+@pytest.mark.parametrize("tamper", ["body", "root"])
+def test_pending_metadata_does_not_mask_proven_immutable_tampering(tamper):
+    s = clean_snapshot()
+    event = s["events"][0]
+    event["anchor"] = {"status": "PENDING"}
+    if tamper == "body":
+        event["payload"]["config_hash"] = H("tampered config")
+        event["payload_hash"] = Hc(event["payload"])
+    else:
+        s["anchor_evidence"]["anchors"][0]["merkle_root"] = H("tampered root")
+    failed, reason, out, _ = audit(s)
+    assert failed and reason == "BATCH_NOT_ANCHORED"
+    assert out["anchors_mismatch"] > 0
+    if tamper == "body":
+        assert out["events_hash_mismatch"] > 0
+
+
+def test_lagging_gateway_index_catches_up_without_an_anchor_failure():
+    s = clean_snapshot()
+    record = s["anchor_evidence"]["anchors"].pop(0)
+    key = H(record["anchor_id"])
+    first = audit(s)
+    assert first[:2] == (False, "BATCH_NOT_ANCHORED")
+    assert first[2]["anchors_mismatch"] == 0
+    assert first[2]["chain_anchor_ids_missing_from_gateway"] == [key]
+    s["anchor_evidence"]["anchors"].insert(0, record)
+    assert gateway_anchor_omissions(s["chain"], s["anchor_evidence"]) == []
+    assert audit(s)[:2] == (False, None)
+
+
+def test_omission_confirmation_only_counts_currently_missing_matching_ids():
+    s = clean_snapshot()
+    record = s["anchor_evidence"]["anchors"].pop(0)
+    key = H(record["anchor_id"])
+    s["confirmed_gateway_anchor_omissions"] = [H("different anchor")]
+    assert audit(s)[:2] == (False, "BATCH_NOT_ANCHORED")
+    s["confirmed_gateway_anchor_omissions"] = [key, H("different anchor")]
+    failed, _, out, _ = audit(s)
+    assert failed and out["anchors_mismatch"] == 1
+    # A stale timer confirmation cannot override a now-complete Gateway index.
+    s["anchor_evidence"]["anchors"].insert(0, record)
+    assert audit(s)[:2] == (False, None)
+
+
+@pytest.mark.parametrize("unavailable", ["node", "index", "index_incomplete", "records", "duplicate_record"])
+def test_omission_candidates_require_available_node_and_complete_valid_index(unavailable):
+    s = clean_snapshot()
+    if unavailable == "node":
+        s["chain"]["available"] = False
+    elif unavailable == "index":
+        s["anchor_evidence"] = None
+    elif unavailable == "index_incomplete":
+        s["anchor_evidence"]["complete"] = False
+    elif unavailable == "records":
+        s["anchor_evidence"]["anchors"] = None
+    else:
+        s["anchor_evidence"]["anchors"].append(deepcopy(s["anchor_evidence"]["anchors"][0]))
+    assert gateway_anchor_omissions(s["chain"], s["anchor_evidence"]) is None
 
 
 def test_a_proven_failure_remains_visible_when_other_evidence_is_missing():

@@ -114,6 +114,44 @@ def _state_checks(s, events, chain, out, refs):
     return "NODE_UNAVAILABLE" if missing else None
 
 
+def gateway_anchor_omissions(chain: dict, evidence: dict) -> list[str] | None:
+    """Find confirmed node anchors absent from a complete Gateway index.
+
+    These are observation candidates, not immediately proven violations: the
+    Gateway's node or poller can lag the independently pinned node. The worker
+    persists the first observation and repeats this read after its bounded wait
+    before supplying ``confirmed_gateway_anchor_omissions`` to the audit.
+    ``None`` means the independent bundle or complete index is unavailable.
+    """
+    if not isinstance(chain, dict) or chain.get("available") is not True:
+        return None
+    confirmed = chain.get("confirmed_block")
+    anchors, logs = chain.get("anchors"), chain.get("anchor_logs")
+    if (type(confirmed) is not int or confirmed < 0
+            or not isinstance(anchors, dict) or not isinstance(logs, dict)
+            or not isinstance(evidence, dict) or evidence.get("complete") is not True
+            or not isinstance(evidence.get("anchors"), list)):
+        return None
+    known = set()
+    for record in evidence["anchors"]:
+        if not isinstance(record, dict) or not isinstance(record.get("anchor_id"), str):
+            return None
+        identity = H(record["anchor_id"])
+        if identity in known:
+            return None
+        known.add(identity)
+    absent = []
+    for identity, anchor in anchors.items():
+        log = logs.get(identity)
+        if (not isinstance(anchor, dict) or not isinstance(log, dict)
+                or type(log.get("block_number")) is not int
+                or not 0 <= log["block_number"] <= confirmed):
+            continue
+        if identity not in known:
+            absent.append(identity)
+    return sorted(absent)
+
+
 def _anchor_checks(s, events, rejections, chain, out, refs):
     evidence = s.get("anchor_evidence")
     node_anchors, node_logs = chain.get("anchors"), chain.get("anchor_logs")
@@ -167,14 +205,15 @@ def _anchor_checks(s, events, rejections, chain, out, refs):
                    for log in node_logs.values())
     omitted_events, omitted_rejections = set(), set()
     seen_event_anchors, seen_rejection_anchors = {}, {}
-    known_hashes = {H(aid) for aid in by_id}
-    absent = []
-    # The worker collects the fixed node bundle BEFORE reading the Gateway
-    # index. New later chain progress therefore cannot race this comparison.
-    # A missing Gateway entry is a proven omission only with a confirmed log;
-    # an anchorAt entry whose log is unavailable stays INCONCLUSIVE instead.
-    absent = sorted(aid for aid in node_anchors if aid not in known_hashes
-                    and aid in node_logs and node_logs[aid]["block_number"] <= confirmed)
+    # Even with a fixed independent read, the Gateway's own node or poller can
+    # be behind. Only the worker's persisted wait plus a fresh complete index
+    # read can promote the same still-absent anchor to a proven discrepancy.
+    absent = gateway_anchor_omissions(chain, evidence) or []
+    confirmed_absent = s.get("confirmed_gateway_anchor_omissions", [])
+    if not isinstance(confirmed_absent, list) or not all(isinstance(aid, str) for aid in confirmed_absent):
+        confirmed_absent = []
+    confirmed_absent = set(absent).intersection(confirmed_absent)
+    missing |= bool(set(absent) - confirmed_absent)
     out["chain_anchor_ids_missing_from_gateway"] = absent
     for aid in relevant:
         record = by_id.get(aid)
@@ -228,9 +267,17 @@ def _anchor_checks(s, events, rejections, chain, out, refs):
                 bad_leaf_events.add(identity)
                 bad = True
             bad |= event.get("event_id") != identity or event.get("election_id") != s["election_id"]
-            bad |= metadata.get("status") != "ANCHORED" or metadata.get("anchor_id") != aid
-            bad |= any(metadata.get(key) != record.get(key) for key in ("merkle_root", "mode", "block_number"))
-            bad |= metadata.get("tx_hash", "").lower() != record.get("tx_hash", "").lower()
+            if metadata.get("status") == "PENDING":
+                # snapshot() may predate collect() and the later Gateway tree.
+                # The immutable body/leaf/root checks above still apply, but a
+                # stale mutable status cannot prove a contradictory anchor.
+                missing = True
+                if identity in selected_events:
+                    unavailable_events.add(identity)
+            else:
+                bad |= metadata.get("status") != "ANCHORED" or metadata.get("anchor_id") != aid
+                bad |= any(metadata.get(key) != record.get(key) for key in ("merkle_root", "mode", "block_number"))
+                bad |= metadata.get("tx_hash", "").lower() != record.get("tx_hash", "").lower()
         if complete_leaves:
             bad |= merkle_root(computed) != onchain["merkle_root"]
             if times:
@@ -309,7 +356,7 @@ def _anchor_checks(s, events, rejections, chain, out, refs):
                 refs.append({"kind": "ledger_rejection", "ref": identity})
             else:
                 unavailable_rejections.add(identity)
-    out["anchors_mismatch"] = len(bad_anchors) + len(absent)
+    out["anchors_mismatch"] = len(bad_anchors) + len(confirmed_absent)
     out["events_hash_mismatch"] = (out.get("events_hash_mismatch") or 0) + len(bad_leaf_events)
     out["events_unanchored"] = len(unavailable_events)
     out["rejections_unanchored"] = len(unavailable_rejections)

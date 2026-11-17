@@ -92,6 +92,20 @@ def test_clean_complete_evidence_can_pass_and_is_immutable():
     assert s == before
 
 
+@pytest.mark.parametrize("known_registry_violation", [False, True])
+def test_missing_selected_checkpoint_is_unavailable_and_preserves_known_violations(known_registry_violation):
+    s, _, _ = clean()
+    s["events"] = [e for e in s["events"] if e["event_id"] != s["checkpoint_event_id"]]
+    if known_registry_violation:
+        s["chain"]["registry"]["org_observer"]["signer"] = EIP191Signer((23).to_bytes(32, "big")).address
+    before = deepcopy(s)
+    result, reason, observed, _ = outcome(s)
+    assert (result, reason) == ("FAIL" if known_registry_violation else "INCONCLUSIVE", "OTHER")
+    assert observed["invalid_signatures"] == int(known_registry_violation)
+    assert "The selected CHECKPOINT_COMMITTED evidence is unavailable for R4." in observed["evidence_unavailable"]
+    assert s == before
+
+
 @pytest.mark.parametrize("gap", ["chain", "registry", "operator", "governance", "history"])
 def test_missing_evidence_never_passes(gap):
     s, _, _ = clean()

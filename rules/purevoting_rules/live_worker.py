@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 
 from .engine import evaluate_all
+from .chain_audit import gateway_anchor_omissions
 from .findings import build_finding
 from .live_chain import ChainPins, PinnedChain, reported_anchor_block
 from .live_inputs import InputError, LiveInputs
@@ -33,6 +34,8 @@ class PollJournal:
                                 " PRIMARY KEY(election, event))")
                 self.db.execute("CREATE TABLE IF NOT EXISTS evaluated (election TEXT, event TEXT, at INTEGER NOT NULL,"
                                 " policy TEXT NOT NULL, PRIMARY KEY(election, event))")
+                self.db.execute("CREATE TABLE IF NOT EXISTS anchor_index_gaps (election TEXT, event TEXT, anchor TEXT,"
+                                " fingerprint TEXT NOT NULL, at REAL NOT NULL, PRIMARY KEY(election, event, anchor))")
                 value = json.dumps([str(pins.chain_id), pins.contract_address.lower(), signer.address.lower()])
                 self.db.execute("INSERT OR IGNORE INTO network VALUES (1,?)", (value,))
                 if self.db.execute("SELECT identity FROM network WHERE id=1").fetchone() != (value,):
@@ -52,6 +55,33 @@ class PollJournal:
         if row is None or row[1] == "recoverable":
             return True
         return row[1] == "partial" and (now < row[0] or now - row[0] >= partial_interval)
+
+    def confirmed_anchor_omissions(self, eid, event, gaps, read_started, read_finished, wait_seconds):
+        """Require a second complete index read after each commitment's own wait.
+
+        A checkpoint's acceptance age says nothing about when a new node/Gateway
+        gap began. Keep its first observation across restarts and require the
+        qualifying read to START after the deadline; slow proof collection must
+        not turn a pre-deadline index into a post-deadline confirmation.
+        """
+        if gaps is None:
+            return []  # An unavailable index proves neither omission nor recovery.
+        confirmed = []
+        with self.db:
+            previous = {anchor: (fingerprint, at) for anchor, fingerprint, at in self.db.execute(
+                "SELECT anchor,fingerprint,at FROM anchor_index_gaps WHERE election=? AND event=?", (eid, event))}
+            for anchor in previous.keys() - gaps.keys():
+                self.db.execute("DELETE FROM anchor_index_gaps WHERE election=? AND event=? AND anchor=?",
+                                (eid, event, anchor))
+            for anchor, fingerprint in sorted(gaps.items()):
+                old_fingerprint, first = previous.get(anchor, (None, read_finished))
+                if old_fingerprint != fingerprint or read_finished < first or read_finished < read_started:
+                    first = read_finished  # A changed commitment or backwards clock starts a new wait.
+                self.db.execute("INSERT OR REPLACE INTO anchor_index_gaps VALUES (?,?,?,?,?)",
+                                (eid, event, anchor, fingerprint, first))
+                if read_started <= read_finished and read_started >= first + wait_seconds:
+                    confirmed.append(anchor)
+        return confirmed
 
     def completed(self, eid, event, now, outcomes):
         unresolved = [o for o in outcomes if o.result == "INCONCLUSIVE"]
@@ -193,6 +223,7 @@ class Worker:
                         blocked = "CHAIN_CONFIG_MISMATCH"
                         result.read_errors += 1
                         continue
+                    anchor_read_started = self.now()
                     try:
                         snap["anchor_evidence"] = self.inputs.anchor_evidence(
                             eid, k, snap["events"], snap["rejections"], chain=snap["chain"])
@@ -205,6 +236,13 @@ class Worker:
                         # An unavailable anchor index is never an empty index;
                         # after the deadline the independent rules may still run.
                         snap["anchor_evidence"] = {"complete": False}
+                    missing = gateway_anchor_omissions(snap["chain"], snap["anchor_evidence"])
+                    gaps = None if missing is None else {
+                        identity: json.dumps([snap["chain"]["anchors"][identity],
+                                              snap["chain"]["anchor_logs"][identity]],
+                                             sort_keys=True, separators=(",", ":")) for identity in missing}
+                    snap["confirmed_gateway_anchor_omissions"] = self.journal.confirmed_anchor_omissions(
+                        eid, commit["event_id"], gaps, anchor_read_started, self.now(), 2 * self.batch_seconds + 60)
                     # Gateway acceptance plus a matching commitment in its ledger is established.
                     # When local depth is unknown/insufficient after the timeout, still evaluate
                     # the off-chain rules, but never use a not-yet-confirmed item as a chain mismatch.

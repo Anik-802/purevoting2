@@ -10,7 +10,7 @@ visible token state, and the subsequent snapshots. No hidden mapping is invented
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 
 from .hashing import H, proposal_digest, review_digest, roster_hash, target_hash
 from .signing import verify_signature
@@ -292,7 +292,10 @@ class _Audit:
         processed_effects = set()
         early = []
         all_closes = []
-        last_commit = next(e for e in self.checkpoints if e["event_id"] == self.s["checkpoint_event_id"])
+        last_commit = next((e for e in self.checkpoints if e["event_id"] == self.s["checkpoint_event_id"]), None)
+        if last_commit is None:
+            self.unavailable("OTHER", "The selected CHECKPOINT_COMMITTED evidence is unavailable for R4.")
+            return
         audit_time = _seconds(last_commit["occurred_at"])
         for index, event in enumerate(self.core):
             kind, ep, j = event["type"], event["payload"], event["checkpoint"]

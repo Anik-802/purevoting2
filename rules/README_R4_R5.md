@@ -47,6 +47,12 @@ proofs, immutable governance, and state replay against
 `electionStateAtCheckpoint(k)`. Later mutable chain progress does not substitute
 for that stored checkpoint state.
 
+Cached `PENDING` metadata remains unavailable when a subsequent read already sees
+the event's confirmed tree. A node anchor missing from the Gateway index is also
+initially unavailable: the worker persists a separate wait for that commitment
+and requires a fresh complete index read after the wait before confirming an
+omission. Neither timing case hides independently demonstrated hash/root errors.
+
 ## Decision and deployment limits
 
 Complete implementation coverage does not mean evidence is available or a
