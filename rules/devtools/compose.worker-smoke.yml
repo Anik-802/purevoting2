@@ -1,5 +1,10 @@
 # Use only in the separate development project. Paths are relative to the first compose file (repository root).
 services:
+  core:
+    # This limited developer smoke uses a fresh DB without trustee registration.
+    # Production/integration defaults remain ELGAMAL_ED25519_V1.
+    environment:
+      BALLOT_SCHEME: SEALED_BOX_V1
   ledger-gateway:
     command: ["uvicorn", "rules_dev.audit_smoke_gateway:app", "--host", "0.0.0.0", "--port", "8100", "--no-access-log"]
     volumes:

@@ -147,7 +147,7 @@ def development_cases(seed: int = 2026) -> list[dict]:
     def add(case_id: str, description: str, snapshot: dict, **changes: str) -> None:
         cases.append({"case_id": case_id, "description": description, "snapshot": snapshot, "expected": {**_GOOD, **changes}})
 
-    add("clean_cumulative", "Twenty synthetic voters; three credentials redeemed, two cast; normal R4/R5 remain explicitly partial.", deepcopy(original))
+    add("clean_cumulative", "Twenty synthetic voters; three credentials redeemed, two cast; independent node evidence is deliberately absent.", deepcopy(original))
     s = deepcopy(original)
     for kind in ("TOKEN_ALREADY_USED", "CREDENTIAL_ALREADY_USED", "ELECTION_NOT_OPEN"):
         s["views"]["rejected_attempts"].append({"view": "rejected_attempts", "row_key": factory.identity("att"), "kind": kind, "subject_hash": None, "checkpoint": 2})
@@ -221,14 +221,14 @@ def development_cases(seed: int = 2026) -> list[dict]:
     event = next(e for e in s["events"] if e["type"] == "TOKEN_USED")
     event["payload"]["token_hash"] = H("unknown-synthetic-token")
     _rehash(event)
-    add("unknown_accepted_token", "An accepted token does not exist in token_status, despite numerically matching totals.", s, R1="FAIL", R5="FAIL")
+    add("unknown_accepted_token", "An accepted token does not exist in token_status; R4 also detects the unmatched token-state change.", s, R1="FAIL", R4="FAIL", R5="FAIL")
 
     s = deepcopy(original)
     row = s["views"]["token_status"][0]
     row["revoked_checkpoint"] = 2
     row["status"] = "REVOKED"
     _sync_current_commit(s)
-    add("used_and_revoked_token", "One token row records both use and revocation; this is forbidden regardless of event order.", s, R1="FAIL")
+    add("used_and_revoked_token", "A used token is revoked without an authorized event; its live-token root also differs from the ledger.", s, R1="FAIL", R4="FAIL", R5="FAIL")
 
     s = deepcopy(original)
     del s["history"]["0"]
@@ -255,7 +255,7 @@ def development_cases(seed: int = 2026) -> list[dict]:
     add("accepted_after_close_final", "A voter event beyond CLOSE_FINAL is a violation even with an in-window bucket.", s, R1="FAIL", R2="FAIL", R3="FAIL", R5="FAIL")
 
     # Tally-count fixture uses the clean prefix above, without its bad post-close
-    # event. Revealed-key cryptography remains explicitly unimplemented.
+    # event. This older synthetic fixture intentionally supplies no private key.
     s = deepcopy(s)
     s["events"] = [e for e in s["events"] if e["checkpoint"] <= 3]
     s["history"].pop("4", None)

@@ -59,13 +59,13 @@ def write_reports(output: Path, result: dict[str, Any]) -> None:
 <div class="eyebrow">Development evidence · version {escape(result["version"])}</div>
 <h1>PureVoting 2 rules simulation</h1>
 <p>Synthetic fixtures and in-process Core/Gateway mocks. No live election, blockchain transaction, or AI model was used.</p>
-<p class="muted">Contracts v1.0 · source {escape(result["upstream_commit"][:7])} · Python {escape(result["runtime"]["python"])} · seeds {escape(", ".join(map(str,result["seeds"])))}</p>
+<p class="muted">Contracts v1.2.2 · implementation base {escape(result["upstream_commit"][:7])} · Python {escape(result["runtime"]["python"])} · seeds {escape(", ".join(map(str,result["seeds"])))}</p>
 <div class="stats"><div class="stat"><b>{vector_ok}/{len(result["hash_vectors"])}</b><span>Independent hashing vectors matched</span></div>
 <div class="stat"><b>{assertion_ok}/{n_assertions}</b><span>Development outcome assertions matched</span></div>
 <div class="stat"><b>{result["findings_stored"]}</b><span>Finding bodies delivered to local mocks</span></div></div>
-<div class="scope"><strong>Scope:</strong> R1–R3 are implemented in the local evaluator. R4/R5 are partial and are marked with *. A partial rule never returns PASS. These development assertions are authored with the prototype; they are not Harits’s independent experimental labels. Official T01–T16 and production integration remain unverified.</div>
+<div class="scope"><strong>Scope:</strong> R1–R5 have complete implementation coverage. These older fixtures deliberately omit independent chain evidence, so clean R4/R5 results remain INCONCLUSIVE. Complete-evidence TALLY tests are run separately by pytest. These development assertions are authored with the prototype; they are not Harits’s independent experimental labels. Official T01–T16 and production integration remain unverified.</div>
 <h2>Observed rule outcomes</h2><p class="muted">FAIL means a rule detected a simulated violation. MATCH means the actual outcome equals that case’s development assertion. These are different measurements.</p>
-<div class="table-wrap"><table><thead><tr><th>Seed</th><th>Development case</th><th>R1</th><th>R2</th><th>R3</th><th>R4 *</th><th>R5 *</th><th>Assertion</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>Seed</th><th>Development case</th><th>R1</th><th>R2</th><th>R3</th><th>R4</th><th>R5</th><th>Assertion</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
 <h2>Scheduler readiness examples</h2><table><thead><tr><th>Condition</th><th>Run rules</th><th>Alert</th><th>Anchor timeout</th></tr></thead><tbody>{scheduler_rows}</tbody></table>
 <h2>Finding explanations and pending checks</h2>{"".join(details)}
 <h2>Publication boundary</h2><p>Finding bodies were schema validated, persisted in SQLite, hashed, signed with an ephemeral EIP-191 test signer, registered through an in-process Gateway mock, and submitted to an in-process Core mock. Injected HTTP 503 responses exercised unchanged-body retries. This does not verify a deployed node, on-chain registration, quorum, or real network recovery.</p>
@@ -85,10 +85,10 @@ def write_reports(output: Path, result: dict[str, Any]) -> None:
 <text x="528" y="280" font-size="48" font-weight="bold">{assertion_ok}/{n_assertions}</text><text x="528" y="327" font-size="21">Development assertions</text>
 <text x="968" y="280" font-size="48" font-weight="bold">{result["findings_stored"]}</text><text x="968" y="327" font-size="21">Mock-delivered findings</text>
 <text x="60" y="420" font-size="27" font-weight="bold">Coverage and limitations</text>
-<text x="60" y="463" font-size="23">R1–R3: implemented local evaluators. R4/R5: partial; never a partial PASS.</text>
+<text x="60" y="463" font-size="23">R1–R5 implemented; these fixtures omit independent chain evidence.</text>
 <text x="60" y="506" font-size="23">Actual rule outcomes: {counts['PASS']} PASS · {counts['FAIL']} FAIL · {counts['INCONCLUSIVE']} INCONCLUSIVE</text>
 <text x="60" y="549" font-size="21">FAIL is a detected fixture violation. MATCH is a development assertion result.</text>
 <text x="60" y="602" font-size="22" font-weight="bold" fill="#8a5c08">Official scenario evaluation and live integration are not completed.</text>
-<text x="60" y="652" font-size="18" fill="#58677a">Contracts v1.0 · source {escape(result['upstream_commit'][:7])} · Python {escape(result['runtime']['python'])} · {len(result['cases'])} case runs</text>
+<text x="60" y="652" font-size="18" fill="#58677a">Contracts v1.2.2 · implementation base {escape(result['upstream_commit'][:7])} · Python {escape(result['runtime']['python'])} · {len(result['cases'])} case runs</text>
 <text x="60" y="695" font-size="18" fill="#58677a">Recorded results: results.json and rule_outcomes.csv</text></g></svg>'''
     (output / "progress.svg").write_text(svg, encoding="utf-8")

@@ -13,7 +13,7 @@ import yaml
 from purevoting_rules.engine import OBSERVED_KEYS, evaluate_all, evaluate_rule
 from purevoting_rules.findings import build_finding, validate_submission
 from purevoting_rules.fixtures import _Factory, _rehash, development_cases
-from purevoting_rules.hashing import H, Hc, target_hash
+from purevoting_rules.hashing import H, Hc, target_hash, result_hash
 from purevoting_rules.paths import reference_root
 
 
@@ -83,8 +83,10 @@ class RuleEngineTests(unittest.TestCase):
                     for ref in outcome.evidence_refs:
                         evidence_validator.validate(ref)
                     if outcome.rule_id in {"R4", "R5"}:
-                        self.assertEqual(outcome.coverage, "partial")
-                        self.assertTrue(outcome.unimplemented_checks)
+                        self.assertEqual(outcome.coverage, "complete")
+                        self.assertFalse(outcome.unimplemented_checks)
+                        # These historical development fixtures still lack
+                        # independently pinned node/anchor evidence.
                         self.assertNotEqual(outcome.result, "PASS")
 
     def test_repeatability_and_input_immutability(self):
@@ -346,6 +348,9 @@ class RuleEngineTests(unittest.TestCase):
         tally["payload"]["ballot_count"] = 2
         _rehash(tally)
         self.assertEqual(evaluate_rule("R3", snapshot).result, "PASS")
+        self.assertEqual(evaluate_rule("R5", snapshot).observed["tally_result_hash_mismatches"], 1)
+        tally["payload"]["result_hash"] = result_hash({**tally["payload"], "election_id": snapshot["election_id"]})
+        _rehash(tally)
         self.assertEqual(evaluate_rule("R5", snapshot).inconclusive_reason, "KEY_NOT_REVEALED")
         tally["payload"]["excluded_ballots"] = 1
         self.assertEqual(evaluate_rule("R3", snapshot).result, "FAIL")
@@ -355,9 +360,9 @@ class RuleEngineTests(unittest.TestCase):
 
     def test_elgamal_tally_needs_shares_not_a_private_key(self):
         # D-30: an ElGamal election never reveals a private key; R5 waits for the decryption shares instead
-        snapshot = self.snapshot("tally_count_mismatch")
+        from test_complete_tally import complete_tally
+        snapshot = complete_tally()
         config = snapshot["views"]["election_config"][0]
-        config["ballot_scheme"] = "ELGAMAL_ED25519_V1"
         config["decryption_shares"] = None
         self.assertEqual(evaluate_rule("R5", snapshot).inconclusive_reason, "KEY_NOT_REVEALED")
         config["decryption_shares"] = []
@@ -401,7 +406,9 @@ class RuleEngineTests(unittest.TestCase):
         self.assertGreater(outcome.observed["sealed_hash_mismatches"], 0)
 
     def test_r5_unavailable_and_pending_reasons(self):
-        expected = {"node_unavailable": "NODE_UNAVAILABLE", "missing_historical_view": "VIEW_UNAVAILABLE", "pending_anchor": "BATCH_NOT_ANCHORED", "clean_cumulative": "OTHER"}
+        # The old node.available flag is scheduling metadata, not registry or
+        # anchor evidence; a true flag must not authorize a R5 PASS.
+        expected = {"node_unavailable": "NODE_UNAVAILABLE", "missing_historical_view": "VIEW_UNAVAILABLE", "pending_anchor": "NODE_UNAVAILABLE", "clean_cumulative": "NODE_UNAVAILABLE"}
         for case, reason in expected.items():
             with self.subTest(case=case):
                 result = evaluate_rule("R5", self.snapshot(case))

@@ -1,0 +1,54 @@
+name: rules
+
+on:
+  push:
+    paths:
+      - "rules/**"
+      - "contracts/**"
+      - "tests/vectors/**"
+      - ".github/workflows/rules.yml"
+  pull_request:
+    paths:
+      - "rules/**"
+      - "contracts/**"
+      - "tests/vectors/**"
+      - ".github/workflows/rules.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Python 3.11 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # Exercise Windows' native default encoding with UTF-8 mode disabled.
+      # The hosted runner's code page is reported below; this does not claim
+      # that GitHub's Windows image runs in the Korean CP949 system locale.
+      PYTHONUTF8: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: rules/requirements-lock.txt
+      - name: Install the same locked dependencies as the rules image
+        run: python -m pip install -r rules/requirements-lock.txt
+      - name: Report and check the interpreter encoding mode
+        run: >-
+          python -c "import locale, sys; print('Python:', sys.version);
+          print('Default text encoding:', locale.getencoding());
+          print('UTF-8 mode:', sys.flags.utf8_mode); assert sys.flags.utf8_mode == 0"
+      - name: Run rules, shared-vector, and adversarial regression tests
+        # The suite loads the committed hash and ElGamal vector expectations;
+        # it does not regenerate expected outputs from the rules implementation.
+        # RPC/HTTP tests use controlled evidence. This job is not a real-chain
+        # Docker integration test or evidence of a successful official T01 run.
+        run: python -m pytest -q -c rules/pytest.ini rules/tests

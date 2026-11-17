@@ -5,19 +5,19 @@ accepted LedgerEvents and Gateway Rejections for one committed checkpoint. The
 adapter must fetch every page and select the requested as-of views. Local guards
 detect visible contradictions (future row checkpoints or a known historical commit
 omitted from events); they cannot prove that an external response is complete.
-R1–R3 implement the frozen predicates on that evidence. R4/R5 deliberately expose
-partial coverage; a clean local subset can never be reported as a complete PASS.
+R4/R5 additionally require independently read, confirmed contract evidence. A
+clean local subset is insufficient for PASS when that evidence is unavailable.
 """
 from __future__ import annotations
 
-import base64
-import binascii
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .hashing import H, Hc, ballot_set_root, snapshot_hash, target_hash
 from .models import RuleOutcome
+from .admin_audit import audit_admin
+from .chain_audit import audit_chain
+from .integrity_local import audit_local
 
 VOTER_TYPES = {"TOKEN_USED", "BALLOT_RECEIVED"}
 TABLES = ("roster", "token_status", "credential_issuance", "ballot_receipts", "admin_actions", "rejected_attempts")
@@ -25,7 +25,7 @@ _RULE_VIEWS = {
     "R1": ("token_status", "credential_issuance", "rejected_attempts"),
     "R2": ("election_config", "admin_actions", "rejected_attempts"),
     "R3": TABLES,
-    "R4": ("admin_actions", "election_config"),
+    "R4": ("admin_actions", "election_config", "roster", "token_status"),
     "R5": TABLES + ("election_config",),
 }
 _ROW_CHECKPOINT_FIELDS = {
@@ -36,18 +36,11 @@ _ROW_CHECKPOINT_FIELDS = {
     "admin_actions": ("requested_checkpoint", "status_checkpoint"),
     "rejected_attempts": ("checkpoint",),
 }
-R4_UNIMPLEMENTED = (
-    "Verify request, approval and review signatures against node-read organization keys and quorum",
-    "Replay roster/token effects as exact sets in seq order, including effect windows and roster-hash chains",
-    "Compare creation organizations/operator and proposal state to independent contract getters",
-    "Detect all row changes between historical checkpoints without matching administrative events",
-)
-R5_UNIMPLEMENTED = (
-    "Read pinned-node anchorAt and independently verify event/rejection Merkle proofs and roots",
-    "Replay full election state and compare electionStateAtCheckpoint and electionGovernance getters",
-    "Recompute all roster/token/config roots and verify revealed key derivation and commitment",
-    "Decrypt ledger-accepted sealed ballots, or for ElGamal elections verify every ballot proof, the sums and the decryption shares, and independently reproduce tally results and invalid set",
-)
+# Coverage is the implemented predicate set, not a claim that inputs exist or
+# that a deployed integration has passed. Each missing input remains an explicit
+# INCONCLUSIVE even with complete implementation coverage.
+R4_UNIMPLEMENTED = ()
+R5_UNIMPLEMENTED = ()
 OBSERVED_KEYS = {
     "R1": "accepted_duplicate_tokens accepted_duplicate_nullifiers unknown_tokens unknown_nullifiers used_then_revoked refused_duplicates".split(),
     "R2": "events_before_start events_after_end ledger_rejected_window events_after_close_final refused_not_open".split(),
@@ -323,155 +316,25 @@ def _r3(s: dict, events: list[dict], rejections: list[dict], out: dict, refs: li
 
 
 def _r4(s: dict, events: list[dict], rejections: list[dict], out: dict, refs: list) -> tuple[bool, str | None]:
-    actions = {r["row_key"]: r for r in _rows(s, "admin_actions")}
-    config = _rows(s, "election_config")[0]
-    executions = [e for e in events if e["type"] == "ADMIN_ACTION_EXECUTED"]
-    approved = {e["payload"]["proposal_id"] for e in events if e["type"] == "PROPOSAL_CLOSED" and e["payload"]["outcome"] == "APPROVED"}
-    out.update({key: 0 for key in OBSERVED_KEYS["R4"]})
-    out["invalid_signatures"] = None  # Not validated; zero would imply success.
-    out["roster_chain_breaks"] = None
-    out["missing_effects"] = None
-    out["executed_actions"] = len(executions)
-    out["failed_actions"] = sum(e["type"] == "ADMIN_ACTION_FAILED" for e in events)
-    duplicate = {key for key, n in Counter(e["payload"]["proposal_id"] for e in executions).items() if n > 1}
-    out["duplicate_executions"] = len(duplicate)
-    for event in executions:
-        payload = event["payload"]
-        if payload["proposal_id"] in duplicate:
-            refs.append(_event_ref(event))
-        row = actions.get(payload["action_id"])
-        recomputed_target = target_hash({"election_id": s["election_id"], "action_id": row["row_key"], "action_type": row["action_type"], "target": row["target"]}) if row else None
-        if row is None or row["proposal_id"] != payload["proposal_id"] or row["target_hash"] != payload["target_hash"] or recomputed_target != row["target_hash"]:
-            out["target_mismatches"] += 1
-            refs.append(_event_ref(event))
-            if row:
-                refs.append(_row_ref(row, s["checkpoint"]))
-    for event in events:
-        needs_execution = event["type"] in {"ROSTER_AMENDED", "TOKEN_REVOKED", "WINDOW_CHANGED", "ELECTION_VOIDED"} or (event["type"] == "ELECTION_CLOSED" and event["payload"]["reason"] == "EARLY")
-        if not needs_execution:
-            continue
-        payload = event["payload"]
-        matching = [e for e in executions if e["payload"]["proposal_id"] == payload.get("proposal_id") and e["payload"]["action_id"] == payload.get("action_id")]
-        if not matching or payload.get("proposal_id") not in approved:
-            out["unapproved_changes"] += 1
-            refs.append(_event_ref(event))
-        row = actions.get(payload.get("action_id"))
-        if row and event["type"] == "WINDOW_CHANGED" and payload["new_window_end"] != row["target"].get("new_window_end"):
-            out["target_mismatches"] += 1
-            refs.extend([_event_ref(event), _row_ref(row, s["checkpoint"])])
-        if row and matching and event["type"] == "ELECTION_CLOSED":
-            expected_close = max(_time(row["target"]["closed_at"]), _ceil_bucket(matching[0]["occurred_at"], config["time_bucket_seconds"]))
-            if payload["requested_closed_at"] != row["target"]["closed_at"] or _time(payload["closed_at"]) != expected_close:
-                out["target_mismatches"] += 1
-                refs.extend([_event_ref(event), _row_ref(row, s["checkpoint"])])
-    failure = any(out[key] for key in ("unapproved_changes", "duplicate_executions", "target_mismatches"))
-    return failure, "NODE_UNAVAILABLE" if not s.get("node", {}).get("available", False) else "OTHER"
+    for name in _RULE_VIEWS["R4"]:
+        _rows(s, name)
+    if len(_rows(s, "election_config")) != 1:
+        raise MissingEvidence("Exactly one election_config row is required.")
+    return audit_admin(s, events, rejections, out, refs)
 
 
 def _r5(s: dict, events: list[dict], rejections: list[dict], out: dict, refs: list) -> tuple[bool, str | None]:
-    views = {name: _rows(s, name) for name in TABLES}
-    config = _rows(s, "election_config")[0]
-    out.update({key: 0 for key in OBSERVED_KEYS["R5"]})
-    for unknown in ("chain_state_mismatch", "governance_mismatch", "key_mismatch", "root_mismatches", "config_mismatch", "anchors_mismatch"):
-        out[unknown] = None
-    out["rejected_checkpoints"] = sum(r["type"] == "CHECKPOINT_COMMITTED" for r in rejections)
-    refs.extend({"kind": "ledger_rejection", "ref": r["rejection_id"]} for r in rejections if r["type"] == "CHECKPOINT_COMMITTED")
-    missing_history = False
-    checkpoints = [e for e in events if e["type"] == "CHECKPOINT_COMMITTED"]
-    for event in checkpoints:
-        j = event["checkpoint"]
-        past = s.get("history", {}).get(str(j))
-        historical_views = views if j == s["checkpoint"] else (past or {}).get("views")
-        if historical_views is None or any(not isinstance(historical_views.get(name), list) for name in TABLES):
-            missing_history = True
-            continue
-        tables = {entry["table"]: entry for entry in event["payload"]["tables"]}
-        for table in TABLES:
-            committed = tables.get(table)
-            rows = historical_views[table]
-            if not committed or committed["row_count"] != len(rows) or committed["snapshot_hash"] != snapshot_hash(rows):
-                out["tables_mismatched"] += 1
-                refs.extend([_event_ref(event), {"kind": "snapshot", "ref": f"{table}@{j}"}])
-    ballot_events = {e["event_id"]: e for e in events if e["type"] == "BALLOT_RECEIVED"}
-    matched_ids = set()
-    for row in views["ballot_receipts"]:
-        try:
-            sealed = base64.b64decode(row["sealed_ballot"], validate=True)
-            sealed_ok = H(sealed) == row["ballot_hash"]
-        except (ValueError, binascii.Error):
-            sealed_ok = False
-        if not sealed_ok:
-            out["sealed_hash_mismatches"] += 1
-            refs.append(_row_ref(row, s["checkpoint"]))
-        event = ballot_events.get(row["event_id"])
-        if event:
-            matched_ids.add(event["event_id"])
-        matches = event is not None and (row["row_key"], row["ballot_hash"], row["receipt_hash"], row["received_bucket"], row["received_checkpoint"]) == (event["payload"]["nullifier_hash"], event["payload"]["ballot_hash"], event["payload"]["receipt_hash"], event["occurred_at"], event["checkpoint"])
-        if not matches:
-            out["row_ledger_mismatches"] += 1
-            refs.append(_row_ref(row, s["checkpoint"]))
-            if event:
-                refs.append(_event_ref(event))
-    for identity in sorted(ballot_events.keys() - matched_ids):
-        out["row_ledger_mismatches"] += 1
-        refs.append(_event_ref(ballot_events[identity]))
-    used_rows = {r["row_key"]: r for r in views["token_status"] if r["used_checkpoint"] is not None and r["used_checkpoint"] <= s["checkpoint"]}
-    used_events = {e["payload"]["token_hash"]: e for e in events if e["type"] == "TOKEN_USED"}
-    for key in sorted(used_rows.keys() ^ used_events.keys()):
-        out["row_ledger_mismatches"] += 1
-        refs.append(_row_ref(used_rows[key], s["checkpoint"]) if key in used_rows else _event_ref(used_events[key]))
-    for event in events:
-        if Hc(event["payload"]) != event["payload_hash"]:
-            out["events_hash_mismatch"] += 1
-            refs.append(_event_ref(event))
-        if event.get("anchor", {}).get("status") != "ANCHORED":
-            out["events_unanchored"] += 1
-            refs.append(_event_ref(event))
-    openings = [e for e in events if e["type"] == "ELECTION_OPENED"]
-    intervals = Counter()
-    if openings:
-        origin = _time(openings[0]["occurred_at"])
-        interval = config["checkpoint_interval_seconds"]
-        for event in checkpoints:
-            if event["payload"]["reason"] != "PERIODIC":
-                continue
-            offset = int((_time(event["occurred_at"]) - origin).total_seconds())
-            intervals[offset // interval] += 1
-            if offset <= 0 or offset % interval or intervals[offset // interval] > 1:
-                out["checkpoint_cadence_violations"] += 1
-                refs.append(_event_ref(event))
-    current = _checkpoint(s, events)
-    key_missing = False
-    if current["payload"]["reason"] == "TALLY":
-        # D-30: an ElGamal election has no private key; the decryption shares are shown from TALLY instead
-        if config.get("ballot_scheme") == "ELGAMAL_ED25519_V1":
-            key_missing = config.get("decryption_shares") is None
-        else:
-            key_missing = config["private_key"] is None
-        tally_events = [e for e in events if e["type"] == "TALLY_PUBLISHED" and e["checkpoint"] == s["checkpoint"]]
-        out["tally_root_mismatches"] = 0
-        for event in tally_events:
-            p = event["payload"]
-            ledger_hashes = [e["payload"]["ballot_hash"] for e in events if e["type"] == "BALLOT_RECEIVED" and e["checkpoint"] <= p["final_checkpoint"]]
-            row_hashes = [r["ballot_hash"] for r in views["ballot_receipts"] if r["received_checkpoint"] <= p["final_checkpoint"]]
-            # hashing.md and the frozen duplicate vector retain duplicates.
-            mismatch = ballot_set_root(ledger_hashes) != p["ballot_set_root"] or ballot_set_root(row_hashes) != p["ballot_set_root"]
-            out["tally_root_mismatches"] += int(mismatch)
-            if mismatch:
-                refs.append(_event_ref(event))
-    failure_keys = ("rejected_checkpoints", "checkpoint_cadence_violations", "row_ledger_mismatches", "tables_mismatched", "sealed_hash_mismatches", "events_hash_mismatch", "tally_root_mismatches")
-    failed = any(out.get(key, 0) for key in failure_keys)
-    if not s.get("node", {}).get("available", False):
-        reason = "NODE_UNAVAILABLE"
-    elif out["events_unanchored"]:
-        reason = "BATCH_NOT_ANCHORED"
-    elif missing_history:
-        reason = "VIEW_UNAVAILABLE"
-    elif key_missing:
-        reason = "KEY_NOT_REVEALED"
-    else:
-        reason = "OTHER"
-    return failed, reason
+    for name in _RULE_VIEWS["R5"]:
+        _rows(s, name)
+    if len(_rows(s, "election_config")) != 1:
+        raise MissingEvidence("Exactly one election_config row is required.")
+    local_failed, local_reason, detail = audit_local(s, events, rejections, out, refs)
+    chain_failed, chain_reason = audit_chain(s, events, rejections, out, refs)
+    if chain_reason:
+        out["chain_evidence_reason"] = chain_reason
+    if detail:
+        out["evidence_detail"] = detail
+    return local_failed or chain_failed, local_reason or chain_reason
 
 
 def evaluate_rule(rule_id: str, snapshot: dict[str, Any]) -> RuleOutcome:
@@ -497,7 +360,7 @@ def evaluate_rule(rule_id: str, snapshot: dict[str, Any]) -> RuleOutcome:
             summary = f"{rule_id}: checked predicates found no demonstrated violation, but required evidence or implementation coverage is incomplete."
         else:
             result = "PASS"
-            summary = f"{rule_id}: all implemented frozen predicates agree on the supplied complete local evidence."
+            summary = f"{rule_id}: all required predicates agree on the supplied complete audit evidence."
     except MissingEvidence as exc:
         result, reason, summary = "INCONCLUSIVE", exc.reason, str(exc)
     except (KeyError, IndexError, TypeError, ValueError) as exc:
@@ -505,6 +368,8 @@ def evaluate_rule(rule_id: str, snapshot: dict[str, Any]) -> RuleOutcome:
         # malformed or missing required field by substituting an empty clean view.
         result, reason = "INCONCLUSIVE", "OTHER"
         summary = f"{rule_id}: malformed required audit evidence ({type(exc).__name__}); no complete decision is possible."
+    if observed.get("evidence_detail"):
+        summary += " " + observed["evidence_detail"]
     if boundary_issues:
         observed["input_boundary_issues"] = [message for _, message in boundary_issues]
         if result != "FAIL":

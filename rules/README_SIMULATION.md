@@ -1,6 +1,6 @@
 # Local rules simulation
 
-This initial implementation runs synthetic evidence through local rules and a mocked finding publication path. It supplies a reusable starting point for the Rule Engine. It does not run a production worker or connect to a real chain.
+This launcher runs the original synthetic development cases through the current rules and a mocked finding publication path. The complete R4/R5 implementation is described in `README_R4_R5.md`; the complete-evidence ElGamal TALLY scenario runs in the pytest suite. It does not run a production worker or connect to a real chain.
 
 ## Quick start from the repository root
 
@@ -43,13 +43,13 @@ The launcher works both in this standalone handoff (`reference/contracts/`) and 
 
 The evaluator consumes a local snapshot containing `election_id`, the selected `checkpoint`, `checkpoint_event_id`, `ledger_last_seq`, `views`, cumulative accepted `events`, cumulative `rejections`, historical snapshots, and declared mock node availability. Rows and events in the supplied fixtures are checked against the frozen contract definitions in the tests.
 
-The adapter that will obtain real evidence is still required. It must read all pages, enforce the requested election and checkpoint, detect retrieval failures, validate payloads, and supply complete accepted/rejected evidence. A list alone cannot prove that a remote server supplied every record. The simulation assumes the fixture provider is explicit about availability; it does not establish remote completeness. Guards prevent PASS when relevant row fields refer to future checkpoints or when known historical checkpoint evidence is visibly missing from the event stream.
+The live adapter is implemented in `live_inputs.py` and `live_chain.py`; the fixture launcher deliberately does not call it. HTTP reads validate all pages and bind evidence to the election/checkpoint. Independently confirmed registry, state, anchor, leaf and proof evidence is required for R4/R5 PASS. A legacy `node.available` flag by itself does not supply that evidence.
 
-R1-R3 are local implementations of the frozen rule predicates on the supplied evidence. This is not a claim that the live service or formal evaluation is complete. R4/R5 include only selected checks. Their `coverage` and `unimplemented_checks` fields are development report metadata; they are not added to the frozen FindingSubmission schema. Each partial rule returns FAIL when an implemented check establishes a violation, or INCONCLUSIVE with an explanation. A partial rule cannot return PASS.
+R1–R5 have complete implementation coverage against contract specification v1.2.2. R4 verifies approvals and exact administrative effects. R5 checks snapshots, rows, roots, immutable configuration, the pinned chain, and both ballot schemes. `coverage` and `unimplemented_checks` remain development metadata, outside FindingSubmission. Complete implementation coverage never substitutes for missing inputs: an unavailable node, history, proof, key, or share leaves the affected rule INCONCLUSIVE.
 
-R4 still needs signature/quorum validation from node-read organization keys, exact effect replay, historical row-change checks, and independent governance comparisons. R5 still needs direct pinned-node anchor/proof verification, full state/governance replay, all roster/token/config commitment checks, key derivation, decryption, and independent tally reproduction. See the enumerated pending checks in each generated result.
+The original fixtures still use placeholder ciphertext and no independently read chain bundle. Their clean R4/R5 outcomes therefore remain INCONCLUSIVE. They are retained for regression and publication checks. `tests/test_complete_tally.py` separately uses the shared ElGamal vectors with complete synthetic evidence to demonstrate R1–R5 PASS and adversarial FAIL cases.
 
-The scheduler demonstrates the `2 * batch_interval + 60` second anchor deadline. At the default 60-second interval this is 180 seconds. It is not a polling loop, network client, or persisted alert service.
+The scheduler demonstrates the `2 * batch_interval + 60` second evidence deadline, 180 seconds at the default batch interval. `live_worker.py` implements polling and the persisted journal; see `README_WORKER.md`.
 
 ## Publication scope
 
@@ -63,7 +63,7 @@ The test signer is generated in memory. The launcher never writes a private key,
 
 ## Reading the output
 
-- `report.html`: human-readable outcomes, explanations, partial-coverage notes, and scheduling examples.
+- `report.html`: human-readable outcomes, explanations, evidence-availability notes, and scheduling examples.
 - `results.json`: full machine-readable run results, provenance, environment, expected developer outcomes, and actual outcomes.
 - `rule_outcomes.csv`: one row per rule evaluation, suitable for checking decisions without reading the whole report.
 - `progress.svg`: exact summary values from that run for progress reporting.

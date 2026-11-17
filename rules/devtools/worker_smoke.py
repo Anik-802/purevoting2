@@ -75,10 +75,13 @@ def smoke(url):
             items=req("GET",prefix+"/findings",200,headers=h).json()["items"]
             rows=[f for f in items if f["checkpoint"]==k]
             return rows if len({f["rule_id"] for f in rows})==5 else None
-        rows=wait(decisions,"all five stored rule findings",200)
+        # The worker now waits for unavailable independent getters before
+        # publishing an INCONCLUSIVE; allow its 180s deadline plus polling.
+        rows=wait(decisions,"all five stored rule findings",360)
         results={f["rule_id"]:f["result"] for f in rows}
         expected={"R1":"PASS","R2":"PASS","R3":"PASS","R4":"INCONCLUSIVE","R5":"INCONCLUSIVE"}
-        ok = len(rows)==5 and results==expected and all("not implemented" in f["summary"].lower() for f in rows if f["rule_id"] in ("R4","R5"))
+        ok = len(rows)==5 and results==expected and all(f.get("inconclusive_reason") == "NODE_UNAVAILABLE"
+            for f in rows if f["rule_id"] in ("R4","R5"))
         print(json.dumps({"smoke":"developer HTTP check","core":"real","gateway":"development stand-in",
               "ballots_accepted":1,"checkpoint":k,"findings_stored":len(rows),"results":results,
               "matches_smoke_expectation":ok,"official_T01_run":False},sort_keys=True),flush=True)

@@ -12,11 +12,16 @@ from purevoting_rules.live_worker import PollJournal, Worker, main
 from purevoting_rules.publication import CORE_URL, GATEWAY_URL, LocalServices
 from purevoting_rules.signing import EIP191Signer
 from purevoting_rules.storage import FindingStore
+from test_complete_tally import _synthetic_chain
 
 
 class Inputs:
     def __init__(self, snap):
         self.snap = snap
+        evidence = deepcopy(snap)
+        _synthetic_chain(evidence)
+        self.chain = evidence["chain"]
+        self.proofs = evidence["anchor_evidence"]
         self.problem = None
         self.status = "ACCEPTED"
 
@@ -33,6 +38,9 @@ class Inputs:
             raise self.problem
         return deepcopy(self.snap)
 
+    def anchor_evidence(self, eid, k, events, rejections, *, chain=None):
+        return deepcopy(self.proofs)
+
 
 class Node:
     def __init__(self):
@@ -40,6 +48,11 @@ class Node:
 
     def assess(self, *args):
         return self.visibility
+
+    def collect(self, snapshot, evidence):
+        if not self.visibility.node_available or not self.visibility.checkpoint_deep:
+            return {"available": False, "reason": "NODE_UNAVAILABLE"}
+        return deepcopy(self.evidence)
 
 
 class Rig:
@@ -54,6 +67,7 @@ class Rig:
             self.inputs.snap["election_id"]: self.inputs.snap["checkpoint"]},
             transient_body_failures=body_failures, transient_gateway_failures=register_failures)
         self.node = Node()
+        self.node.evidence = self.inputs.chain
         self.clock = 1000
         self.alerts = []
         self.stack = ExitStack()
@@ -97,8 +111,8 @@ def test_signed_publication_resumes_exact_body_after_restart(tmp_path):
         records = r.store.records()
         assert all(x["state"] == "STORED" for x in records)
         assert [(x["rule_id"], x["result"]) for x in records] == [
-            ("R1","PASS"),("R2","PASS"),("R3","PASS"),("R4","INCONCLUSIVE"),("R5","INCONCLUSIVE")]
-        assert all("not implemented" in x["body"]["summary"] for x in records if x["rule_id"] in {"R4","R5"})
+            ("R1","PASS"),("R2","PASS"),("R3","PASS"),("R4","PASS"),("R5","PASS")]
+        assert all("not implemented" not in x["body"]["summary"] for x in records)
 
 
 def test_preflight_mismatch_stops_even_pending_publication(tmp_path):
@@ -188,14 +202,14 @@ def test_lagging_pinned_node_does_not_suppress_offchain_rules_after_timeout(tmp_
         assert {a["kind"] for a in r.alerts} == {"AUDIT_DELAYED"}
 
 
-def test_partial_rules_rechecked_at_interval_not_every_poll(tmp_path):
+def test_complete_settled_checkpoint_not_rechecked_after_restart(tmp_path):
     with closing(Rig(tmp_path)) as r:
         assert r.worker.poll().evaluated == 1
         r.clock += 599
         assert r.worker.poll().skipped == 1
         r.restart()
         r.clock += 1
-        assert r.worker.poll().evaluated == 1
+        assert r.worker.poll().skipped == 1
         assert len(r.store.records()) == 5
 
 

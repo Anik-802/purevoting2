@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import yaml
@@ -17,7 +18,7 @@ from referencing import Registry
 from referencing.jsonschema import DRAFT202012
 
 from .engine import TABLES
-from .hashing import canonical, snapshot_hash
+from .hashing import H, canonical, snapshot_hash
 from .paths import reference_root
 
 VIEWS = ("election_config", *TABLES)
@@ -28,6 +29,11 @@ _PATHS = {
     "view": ("core-api.openapi.yaml", "/internal/v1/views/{view}"),
     "events": ("ledger-gateway.openapi.yaml", "/v1/events"),
     "rejections": ("ledger-gateway.openapi.yaml", "/v1/rejections"),
+    "anchors": ("ledger-gateway.openapi.yaml", "/v1/anchors"),
+    "leaves": ("ledger-gateway.openapi.yaml", "/v1/anchors/{anchor_id}/leaves"),
+    "event": ("ledger-gateway.openapi.yaml", "/v1/events/{event_id}"),
+    "proof": ("ledger-gateway.openapi.yaml", "/v1/events/{event_id}/proof"),
+    "rejection": ("ledger-gateway.openapi.yaml", "/v1/rejections/{rejection_id}"),
 }
 
 
@@ -74,13 +80,17 @@ class LiveInputs:
     the run rather than allowing any clean ledger result.
     """
     def __init__(self, core: httpx.Client, gateway: httpx.Client, *,
-                 page_size: int = 250, max_pages: int = 1000, max_page_bytes: int = 16 * 1024 * 1024):
+                 page_size: int = 250, max_pages: int = 1000, max_page_bytes: int = 16 * 1024 * 1024,
+                 max_anchor_records: int = 4096, max_anchor_members: int = 20000):
         if (type(page_size) is not int or not 1 <= page_size <= 1000 or
                 type(max_pages) is not int or max_pages < 1 or
-                type(max_page_bytes) is not int or max_page_bytes < 1):
+                type(max_page_bytes) is not int or max_page_bytes < 1 or
+                type(max_anchor_records) is not int or max_anchor_records < 1 or
+                type(max_anchor_members) is not int or max_anchor_members < 1):
             raise ValueError("invalid pagination bounds")
         self.core, self.gateway = core, gateway
         self.page_size, self.max_pages, self.max_page_bytes = page_size, max_pages, max_page_bytes
+        self.max_anchor_records, self.max_anchor_members = max_anchor_records, max_anchor_members
         self.validators = _validators(reference_root())
 
     def _read(self, source, kind, path, params):
@@ -227,7 +237,7 @@ class LiveInputs:
         history = {}
         for k in sorted(accepted):
             views = {}
-            for name in VIEWS if k == checkpoint else TABLES:
+            for name in VIEWS:
                 try:
                     views[name] = self._view(election_id, k, name)
                 except InputError:
@@ -237,3 +247,98 @@ class LiveInputs:
         return {"election_id": election_id, "checkpoint": checkpoint, "checkpoint_event_id": current["event_id"],
                 "ledger_last_seq": last_seq, "events": events, "rejections": rejections,
                 "views": history[str(checkpoint)]["views"], "history": history, "node": {"available": False}}
+
+    def anchor_evidence(self, election_id: str, checkpoint: int, events: list[dict],
+                        rejections: list[dict], *, chain: dict | None = None) -> dict:
+        """Read complete trees, including leaves beyond k in a cross-checkpoint batch.
+
+        Read all confirmed anchors, including ones absent from the supplied event
+        list: otherwise an event omitted from both lists could evade the audit.
+        Extra events are kept only in this verification envelope: they must never
+        leak into the rule's cumulative <= k election history. Gateway roots and
+        proofs remain untrusted until compared with the independently pinned node.
+        A failed index page aborts collection. A temporarily unavailable individual
+        tree/proof remains absent so R5 can report BATCH_NOT_ANCHORED after the
+        worker's bounded wait. Invalid/scope-conflicting evidence aborts the run.
+        """
+        anchors, seen, last_block = [], set(), -1
+        for page in self._pages("gateway", "anchors", "/v1/anchors",
+                                {"election_id": election_id}, "items"):
+            for anchor in page["items"]:
+                aid = anchor["anchor_id"]
+                if (aid in seen or anchor["election_id"] != election_id
+                        or anchor["block_number"] < last_block):
+                    raise InputError("gateway", "invalid")
+                seen.add(aid)
+                last_block = anchor["block_number"]
+                anchors.append(anchor)
+                if len(anchors) > self.max_anchor_records:
+                    raise InputError("gateway", "invalid")
+        by_event = {e["event_id"]: e for e in events}
+        by_rejection = {r["rejection_id"]: r for r in rejections}
+        leaves, proofs = {}, {}
+        relevant = {e.get("anchor", {}).get("anchor_id") for e in events}
+        relevant.update(r.get("anchor_id") for r in rejections)
+        confirmed = chain.get("confirmed_block") if isinstance(chain, dict) else None
+        node_anchors = chain.get("anchors") if isinstance(chain, dict) else None
+        members = 0
+        for anchor in anchors:
+            aid = anchor["anchor_id"]
+            if (type(confirmed) is int and isinstance(node_anchors, dict) and aid not in relevant
+                    and H(aid) not in node_anchors and anchor["block_number"] > confirmed):
+                continue  # This anchor is beyond the independent fixed-block read.
+            try:
+                tree = self._read("gateway", "leaves", "/v1/anchors/" + quote(aid, safe="") + "/leaves", {})
+            except InputError as exc:
+                if exc.kind == "invalid":
+                    raise
+                continue
+            if tree["anchor_id"] != aid:
+                raise InputError("gateway", "invalid")
+            members += len(tree["leaves"]) + len(tree["rejection_ids"])
+            if members > self.max_anchor_members:
+                raise InputError("gateway", "invalid")
+            leaves[aid] = tree
+            for leaf in tree["leaves"]:
+                identity = leaf["event_id"]
+                if identity not in by_event:
+                    try:
+                        event = self._read("gateway", "event", "/v1/events/" + quote(identity, safe=""), {})
+                    except InputError as exc:
+                        if exc.kind == "invalid":
+                            raise
+                        continue
+                    if event["event_id"] != identity or event["election_id"] != election_id:
+                        raise InputError("gateway", "invalid")
+                    # A supposedly complete cumulative listing omitted this item.
+                    if event["checkpoint"] <= checkpoint:
+                        raise InputError("gateway", "invalid")
+                    by_event[identity] = event
+            for identity in tree["rejection_ids"]:
+                if identity not in by_rejection:
+                    try:
+                        rejection = self._read("gateway", "rejection", "/v1/rejections/" + quote(identity, safe=""), {})
+                    except InputError as exc:
+                        if exc.kind == "invalid":
+                            raise
+                        continue
+                    if rejection["rejection_id"] != identity or rejection["election_id"] != election_id:
+                        raise InputError("gateway", "invalid")
+                    if rejection["checkpoint"] <= checkpoint:
+                        raise InputError("gateway", "invalid")
+                    by_rejection[identity] = rejection
+        for event in events:
+            if event.get("anchor", {}).get("status") != "ANCHORED":
+                continue
+            identity = event["event_id"]
+            try:
+                proof = self._read("gateway", "proof", "/v1/events/" + quote(identity, safe="") + "/proof", {})
+            except InputError as exc:
+                if exc.kind == "invalid":
+                    raise
+                continue
+            if proof["event_id"] != identity:
+                raise InputError("gateway", "invalid")
+            proofs[identity] = proof
+        return {"complete": True, "anchors": anchors, "leaves": leaves,
+                "events": by_event, "rejections": by_rejection, "proofs": proofs}

@@ -1,45 +1,56 @@
-# Rule Engine service — November 9 handoff
+# Rule Engine HTTP worker — v1.2.2 checks
 
-The HTTP worker polls Core, evaluates rules at accepted checkpoints, signs a finding, registers its hash at the Gateway, then sends the same durable body to Core. Nothing calls the worker. The previous fixture simulation remains available with `python rules/run_simulation.py`.
+The worker reads Core checkpoint views and cumulative Gateway evidence, verifies the independent pinned chain, evaluates R1–R5, signs each finding, registers its hash at the Gateway, and sends the same durable body to Core. Full R4/R5 coverage is described in [README_R4_R5.md](README_R4_R5.md). Finalization requirements are unchanged.
 
-## Run against a local development stack
+## Verify locally
 
-Use a **fresh development project and credentials**. This stack writes a real PostgreSQL database. Its Gateway and RPC are test doubles, not PureChain. They do not independently verify inclusion, organizational signatures or the on-chain signer registry. Do not use this overlay for the official T01, E1/E2, or part B run.
-
-1. Copy the repository's `.env.example` to a private `.env`. Fill all required passwords, service keys, JWT secret and staff setup credentials. Use distinct, disposable keys. The worker needs its own valid secp256k1 private key in `RULE_ENGINE_SIGNER_KEY`; never send it in a progress report. For **this development setup only**, choose a positive numeric `CHAIN_ID`, a nonzero test `CONTRACT_ADDRESS`, `CONFIRMATION_DEPTH=2`, and `PINNED_NODE_URL=http://ledger-gateway:8100/rpc`. For a team deployment use the independently agreed pins and registered signer.
-2. Run the following from the repository root using Docker Compose v2. Stop competing local services on those ports or choose separate published host ports. This worker intentionally does not run in the default part-B mock stack. The command below is provided for the demo PC; Docker execution was not tested in the authoring environment.
-
-   ```sh
-   docker compose -p pv-anik-dev --profile mock -f docker-compose.yml -f docker-compose.integration.yml -f rules/devtools/compose.worker-smoke.yml up -d --build
-   ```
-3. To create a disposable election through the Core API, use a local Python 3.11+ environment with `core/requirements.txt` installed (keep it separate from the rules environment). Set `SMOKE_USERNAME` and `SMOKE_PASSWORD` to the staff setup credentials in that private development database. Run:
-
-   ```sh
-   python rules/devtools/worker_smoke.py --create-local-election --core http://127.0.0.1:8000
-   ```
-
-The check creates one election, issues 20 links, submits one sealed ballot and reads the stored findings for its checkpoint. Expect R1/R2/R3 PASS and R4/R5 INCONCLUSIVE. It exits nonzero for other results. This checks one development path; it does not execute the formal scenario script or supply anyone's expected labels. Shut down using the same compose arguments and `down`. The named data volumes persist.
-
-## Run directly or against the real Gateway
-
-With a rules Python 3.11+ virtual environment active:
+From the repository root with Python 3.11:
 
 ```sh
 python -m pip install -r rules/requirements-lock.txt
-python -m pytest -c rules/pytest.ini rules/tests -q
+python -m pytest -q -c rules/pytest.ini rules/tests
+```
+
+The dependency lock includes PyNaCl 1.5.0, cffi and pycparser, and is also used by `rules/Dockerfile`. The synthetic complete-TALLY tests exercise all five rules, but do not certify a deployed Gateway/PureChain run. The optional local-EVM getter check is documented in `devtools/check_chain_evm.py`; its additional dependencies are separate from the worker's.
+
+## Run on the team's configured integration stack
+
+Use the deployment owner's existing chain, contract and service configuration. `docker-compose.integration.yml` documents the required bootstrap and registry order. The deployed contract must match the checked-out specification, and the observer's rule signer must be registered. ElGamal elections need the three organizations' trustee public records before creation and their shares before tally, as documented in `contracts/ballot-elgamal.md` and `tools/trustees.sh`.
+
+After the integration stack is bootstrapped, rebuild the worker from the repository root:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build rule-engine
+```
+
+For a directly executed worker, set `CORE_URL`, `GATEWAY_URL`, `RULE_KEY`, `RULE_ENGINE_SIGNER_KEY`, `CHAIN_ID`, `CONTRACT_ADDRESS`, `PINNED_NODE_URL`, `CONFIRMATION_DEPTH`, and a private writable `RULE_STATE_DIR`. Use pins agreed with the deployment owner: locally ordered observer/commission URLs must also appear in Gateway `/v1/chain`. Secrets belong in the local environment, outside evidence files.
+
+```sh
 cd rules
 python -m purevoting_rules.live_worker --once
 python -m purevoting_rules.live_worker
 ```
 
-For direct execution export `CORE_URL`, `GATEWAY_URL`, `RULE_KEY`, `RULE_ENGINE_SIGNER_KEY`, `CHAIN_ID`, `CONTRACT_ADDRESS`, `PINNED_NODE_URL`, `CONFIRMATION_DEPTH`, and a writable private `RULE_STATE_DIR`. For local real-Core + dev-Gateway processes, use the host URLs that match the Gateway's configured pins. The real Gateway uses the same API; no mock flag exists on the worker. With Harits’s healthy Gateway and nodes available and merged, use the base + integration compose files only. No service contacts a model provider.
+A standalone `--once` run can report that it is still waiting; the continuous worker retains acceptance times across restarts. A healthy process is a liveness result, not an audit PASS. Inspect the findings at the exact TALLY checkpoint and the poll counters before judging readiness.
 
-The worker uses one state directory per deployment and signer, one writer, a persistent findings database, and a separate poll journal. `RULE_POLL_SECONDS` defaults to 60; `RULE_PARTIAL_RECHECK_SECONDS` to 600; `ANCHOR_BATCH_SECONDS` to 60. Publication retries pending bodies on subsequent polls. A durable 4xx rejection needs investigation; increasing the poll rate does not correct an invalid request. `--healthcheck` only checks worker liveness. Review poll counters (`read_errors`, `retry`, `rejected`, `alert_errors`) and verify stored findings to determine integration readiness. No keys are passed to independent node RPCs.
+## Evidence and failure behavior
 
-## What the evidence means
+The HTTP reader validates election/checkpoint identity, schemas, pagination, ordering and uniqueness. It reads all seven views at every accepted historical checkpoint. Missing views remain unavailable. A missing rejection endpoint never becomes an empty rejection list.
 
-- Reads are cumulative through checkpoint k. The adapter validates the identity, pagination, checkpoint and shape of the responses against the checked-out contracts. A missing rejection route does not mean an empty rejection list. Missing Core views remain unavailable to the affected rules.
-- The worker uses the pinned node list in local order and compares Gateway chain configuration. A depth check on a reported block is **not** a proof of the anchor. With a valid Gateway-accepted checkpoint but missing independent confirmation, it waits; after the deadline it can evaluate rules with off-chain evidence while leaving unsupported chain checks inconclusive. Malformed/unaccepted commitments are not audited as confirmed. The wait starts at the worker's first observation of Core's ACCEPTED status; downtime or a long poll can move it later than the real acceptance time.
-- R4 and R5 still list their unimplemented checks in each finding summary. Reading the pinned node's ID and head does not finish registry/signature verification, anchor/leaf verification, historical state replay, or tally decryption. An audit report generator, local model, and formal T01/T02/T04/T05/T08/T15 results are outside this patch.
-- The unmodified Core development Gateway does not implement the worker's full reads. The opt-in development overlay provides the missing event timestamps, cutoff filter, mock rejection read and chain-ID RPC for this smoke. Its simulated records are not a complete replay of a real Gateway, and it will explicitly refuse missing rejection evidence. The November 19 mock UI stack remains separate.
-- Before merging, verify the compose stack and process-restart persistence on the target host and volume. Keep Harits's expected labels independent and committed before formal runs.
+The node evidence is fixed before reading the Gateway anchor index. Every confirmed anchor is examined, including anchors not referenced by the returned event list, so an omitted accepted ballot cannot disappear from the audit. A cross-checkpoint batch is verified with all its leaves; extra future events remain outside that checkpoint's rule inputs. An unread tree whose checkpoint scope cannot be established leaves R5 INCONCLUSIVE. The default limits are 4,096 anchor records and 20,000 tree members per collection, in addition to page and response-byte limits. Exceeding a limit aborts the collection; no truncated collection produces PASS.
+
+The node reader checks chain identity and reads the registry, governance, checkpoint state, anchors and logs at one explicit confirmed block. It tries locally pinned nodes in order and falls back when a node is lagging. No service key is sent to RPC, and redirects are not followed. Roots and proofs supplied by the Gateway are checked against node commitments.
+
+The worker waits up to `2 * ANCHOR_BATCH_SECONDS + 60` seconds from its first observation of acceptance for missing chain/proof evidence. After that deadline it can publish the rules supported by the complete off-chain snapshot while leaving unavailable R4/R5 checks INCONCLUSIVE. Missing or multiple TALLY events, null decryption shares, and invalid proofs cannot become PASS. Recoverable evidence gaps are reconsidered on the next poll; completed checkpoints are not repeatedly alerted when a later preflight fails. Queued publication failures remain visible.
+
+Findings use a single-writer durable SQLite outbox and a separate poll journal bound to the deployment and signer. `RULE_POLL_SECONDS` defaults to 60. Publication retries the same stored bytes; a permanent 4xx needs investigation. `RULE_PARTIAL_RECHECK_SECONDS` remains supported for future partially implemented rules, but current R4/R5 evidence failures use prompt recovery polling. Optional manual audit requests, direct-chain submission fallback and the AI agent are separate work.
+
+## Limited developer HTTP smoke
+
+`devtools/audit_smoke_gateway.py` and `compose.worker-smoke.yml` are for a separate disposable smoke project. The latter selects `SEALED_BOX_V1` only in that project because a fresh smoke database has no trustee registrations. It does not change the default ElGamal scheme of the team deployment. The fake Gateway provides schema-valid event/anchor/proof reads but does not provide a genuine registry or blockchain.
+
+`devtools/worker_smoke.py` creates one local election and casts one ballot. Its expected results are R1–R3 PASS and R4/R5 INCONCLUSIVE with `NODE_UNAVAILABLE`. It allows the worker's evidence-wait deadline and prints `official_T01_run: false`. Use the isolated Compose helper already reviewed for that smoke project; this small overlay alone does not replace the current integration stack's real node/bootstrap dependencies. The November 12 evidence remains a historical result, not validation of this new patch.
+
+## Rehearsal evidence still needed
+
+On the real team deployment, run the agreed E1/T01 flow, collect the exact TALLY checkpoint's five findings, show zero required mismatch counters, record node/worker health and sanitized poll counters, and then test the contract's actual finalization transaction. Keep Harits's committed scenario expectations unchanged. The upstream contract at the tested base `95793b3` lacks `finalizeElection`, so successful E1 finalization also requires Harits's G18 implementation to be merged and deployed. It also lacks `proposalState`; administrative-action elections require that interface before R4 can fully verify their proposal evidence. A clean election with no proposals does not call that getter.

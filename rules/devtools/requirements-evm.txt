@@ -1,0 +1,11 @@
+# Optional validation only. Install alongside ../requirements-lock.txt.
+# These dependencies are not installed in the production Rule Engine image.
+cached-property==2.0.1
+eth-bloom==4.0.0
+eth-tester==0.13.0b1
+lru-dict==1.4.1
+py-ecc==8.0.0
+py-evm==0.12.1b1
+semantic-version==2.10.0
+sortedcontainers==2.4.0
+trie==4.0.0

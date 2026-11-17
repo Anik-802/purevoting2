@@ -31,7 +31,7 @@ try:
 except ModuleNotFoundError as exc:
     raise SystemExit(f"Missing dependency or module: {exc.name}. Install rules/requirements-lock.txt first.") from None
 
-UPSTREAM = "a42659d54de4e5cb27429068174d934e294b735a"
+UPSTREAM = "95793b32e20e9253c4f94a9bdc51dcb5c31c80f4"
 
 
 def scheduler_examples() -> list[dict]:
@@ -62,10 +62,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("Hash vector conformance failed. Simulation stopped.")
     print(f"Independent hash vector checks: {len(vectors)}/{len(vectors)} matched")
     print("Mode: synthetic development fixtures; local Core/Gateway mocks; AI disabled")
-    print("Coverage: R1-R3 local evaluators; R4/R5 partial (no partial PASS)")
+    print("Coverage: R1-R5 implemented; these older fixtures omit independent chain evidence")
     signer = EIP191Signer()
     result = {
-        "version":__version__,"upstream_commit":UPSTREAM,"contracts_version":"1.0",
+        "version":__version__,"upstream_commit":UPSTREAM,"contracts_version":"1.2.2",
         "run_id":run_id,"created_at":start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "provenance":"synthetic_development", "formal_scenarios_run":False,
         "independent_ground_truth":False,"live_services_used":False,"ai_model_used":False,
@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     write_reports(output,result)
     print(f"Report: {output / 'report.html'}")
     print(f"Actual findings stored in local mocks: {result['findings_stored']}")
-    print("Official integration scenarios: NOT RUN. Production Rule Engine: NOT COMPLETE.")
+    print("Official integration scenarios: NOT RUN. This fixture run does not certify deployment readiness.")
     return 1 if mismatches else 0
 
 
